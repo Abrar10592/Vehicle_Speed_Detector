@@ -1,0 +1,182 @@
+{
+  "cameras": [
+    {
+      "camera_id": "CAM01",
+      "video_path": "videos/sample_two_lane.mp4",
+      "evidence_root": "evidence",
+      "pre_event_seconds": 3.0,
+      "post_event_seconds": 1.0,
+      "min_contour_area": 900,
+      "max_match_distance_px": 75.0,
+      "fps_override": null,
+      "detector": {
+        "type": "yolo",
+        "yolo_model_path": "yolo11n.pt",
+        "confidence": 0.35,
+        "iou": 0.45,
+        "classes": [2, 3, 5, 7]
+      },
+      "lanes": [
+        {
+          "lane_id": "lane_1",
+          "name": "Lane 1",
+          "speed_limit_kmph": 50.0,
+          "polygon": [
+            [0, 555],
+            [505, 262],
+            [632, 262],
+            [500, 720],
+            [0, 720]
+          ],
+          "measurement": {
+            "start_line": [
+              [0, 532],
+              [565, 511]
+            ],
+            "end_line": [
+              [280, 413],
+              [615, 405]
+            ],
+            "start_lines": [
+              [
+                [0, 532],
+                [565, 511]
+              ]
+            ],
+            "end_lines": [
+              [
+                [280, 413],
+                [615, 405]
+              ]
+            ],
+            "distance_m": 18.0
+          }
+        },
+        {
+          "lane_id": "lane_2",
+          "name": "Lane 2",
+          "speed_limit_kmph": 110.0,
+          "polygon": [
+            [641, 261],
+            [646, 697],
+            [1241, 662],
+            [1229, 500],
+            [806, 254]
+          ],
+          "measurement": {
+            "start_line": [
+              [650, 361],
+              [960, 371]
+            ],
+            "end_line": [
+              [700, 554],
+              [1250, 550]
+            ],
+            "start_lines": [
+              [
+                [650, 361],
+                [960, 371]
+              ]
+            ],
+            "end_lines": [
+              [
+                [700, 554],
+                [1250, 550]
+              ]
+            ],
+            "distance_m": 36.0
+          }
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM02",
+      "video_path": "D:/Vehicle_Speed_Detector/videos/sample_two_lane.mp4",
+      "evidence_root": "evidence",
+      "pre_event_seconds": 3.0,
+      "post_event_seconds": 1.0,
+      "min_contour_area": 900,
+      "max_match_distance_px": 75.0,
+      "fps_override": null,
+      "detector": {
+        "type": "yolo",
+        "yolo_model_path": "yolo11n.pt",
+        "confidence": 0.35,
+        "iou": 0.45,
+        "classes": [2, 3, 5, 7]
+      },
+      "lanes": [
+        {
+          "lane_id": "lane_1",
+          "name": "Lane 1",
+          "speed_limit_kmph": 40.0,
+          "polygon": [
+            [3, 710],
+            [523, 711],
+            [631, 263],
+            [541, 246],
+            [3, 516]
+          ],
+          "measurement": {
+            "start_line": [
+              [587, 510],
+              [24, 512]
+            ],
+            "end_line": [
+              [605, 397],
+              [249, 394]
+            ],
+            "start_lines": [
+              [
+                [587, 510],
+                [24, 512]
+              ]
+            ],
+            "end_lines": [
+              [
+                [605, 397],
+                [249, 394]
+              ]
+            ],
+            "distance_m": 40.0
+          }
+        },
+        {
+          "lane_id": "lane_2",
+          "name": "Lane 2",
+          "speed_limit_kmph": 70.0,
+          "polygon": [
+            [651, 256],
+            [666, 701],
+            [1257, 638],
+            [1219, 488],
+            [791, 245]
+          ],
+          "measurement": {
+            "start_line": [
+              [663, 360],
+              [904, 351]
+            ],
+            "end_line": [
+              [703, 585],
+              [1251, 528]
+            ],
+            "start_lines": [
+              [
+                [663, 360],
+                [904, 351]
+              ]
+            ],
+            "end_lines": [
+              [
+                [703, 585],
+                [1251, 528]
+              ]
+            ],
+            "distance_m": 30.0
+          }
+        }
+      ]
+    }
+  ]
+}

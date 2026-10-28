@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+runtime/
+# Videos and generated output (large)
+*.mp4
+*.avi
+*.mkv
+*.mov
+videos/
+evidence/

@@ -1,0 +1,40 @@
+{
+  "camera_id": "CAM01",
+  "evidence_root": "evidence",
+  "pre_event_seconds": 6,
+  "post_event_seconds": 6,
+  "min_contour_area": 900,
+  "max_match_distance_px": 75,
+  "fps_override": null,
+  "detector": {
+    "type": "yolo",
+    "yolo_model_path": "yolo11n.pt",
+    "confidence": 0.35,
+    "iou": 0.45,
+    "classes": [2, 3, 5, 7]
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "name": "Northbound",
+      "speed_limit_kmph": 40,
+      "polygon": [[120, 80], [570, 80], [620, 320], [100, 320]],
+      "measurement": {
+        "start_line": [[140, 150], [560, 150]],
+        "end_line": [[160, 270], [580, 270]],
+        "distance_m": 10.0
+      }
+    },
+    {
+      "lane_id": "lane_2",
+      "name": "Southbound",
+      "speed_limit_kmph": 40,
+      "polygon": [[130, 330], [620, 330], [650, 600], [110, 600]],
+      "measurement": {
+        "start_line": [[170, 390], [600, 390]],
+        "end_line": [[190, 530], [620, 530]],
+        "distance_m": 10.0
+      }
+    }
+  ]
+}
