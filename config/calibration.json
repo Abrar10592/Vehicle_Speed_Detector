@@ -1,8 +1,8 @@
 {
   "cameras": [
     {
-      "camera_id": "CAM01",
-      "video_path": "videos/sample_two_lane.mp4",
+      "camera_id": "CAM03",
+      "video_path": "D:/Vehicle_Speed_Detector/testvideo/50-1.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
@@ -20,78 +20,63 @@
         {
           "lane_id": "lane_1",
           "name": "Lane 1",
-          "speed_limit_kmph": 50.0,
+          "speed_limit_kmph": 30.0,
           "polygon": [
-            [0, 555],
-            [505, 262],
-            [632, 262],
-            [500, 720],
-            [0, 720]
+            [1479, 726],
+            [1104, 636],
+            [26, 877],
+            [2, 1075],
+            [1454, 1064]
           ],
           "measurement": {
             "start_line": [
-              [0, 532],
-              [565, 511]
+              [1488, 739],
+              [939, 724]
             ],
             "end_line": [
-              [280, 413],
-              [615, 405]
+              [1468, 1007],
+              [946, 1011]
             ],
             "start_lines": [
               [
-                [0, 532],
-                [565, 511]
+                [1488, 739],
+                [939, 724]
               ]
             ],
             "end_lines": [
               [
-                [280, 413],
-                [615, 405]
-              ]
-            ],
-            "distance_m": 18.0
-          }
-        },
-        {
-          "lane_id": "lane_2",
-          "name": "Lane 2",
-          "speed_limit_kmph": 110.0,
-          "polygon": [
-            [641, 261],
-            [646, 697],
-            [1241, 662],
-            [1229, 500],
-            [806, 254]
-          ],
-          "measurement": {
-            "start_line": [
-              [650, 361],
-              [960, 371]
-            ],
-            "end_line": [
-              [700, 554],
-              [1250, 550]
-            ],
-            "start_lines": [
+                [1468, 1007],
+                [946, 1011]
+              ],
               [
-                [650, 361],
-                [960, 371]
-              ]
-            ],
-            "end_lines": [
+                [943, 1009],
+                [734, 997]
+              ],
               [
-                [700, 554],
-                [1250, 550]
+                [734, 996],
+                [526, 984]
+              ],
+              [
+                [697, 987],
+                [698, 988]
+              ],
+              [
+                [530, 982],
+                [249, 937]
+              ],
+              [
+                [251, 933],
+                [25, 877]
               ]
             ],
-            "distance_m": 36.0
+            "distance_m": 30.0
           }
         }
       ]
     },
     {
-      "camera_id": "CAM02",
-      "video_path": "D:/Vehicle_Speed_Detector/videos/sample_two_lane.mp4",
+      "camera_id": "CAM04",
+      "video_path": "D:/Vehicle_Speed_Detector/testvideo/60-1.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
@@ -111,72 +96,221 @@
           "name": "Lane 1",
           "speed_limit_kmph": 40.0,
           "polygon": [
-            [3, 710],
-            [523, 711],
-            [631, 263],
-            [541, 246],
-            [3, 516]
+            [1406, 621],
+            [1272, 602],
+            [326, 799],
+            [14, 1068],
+            [1145, 1068],
+            [1426, 991],
+            [1495, 686]
           ],
           "measurement": {
             "start_line": [
-              [587, 510],
-              [24, 512]
+              [1399, 732],
+              [1207, 715]
             ],
             "end_line": [
-              [605, 397],
-              [249, 394]
+              [1392, 928],
+              [1392, 926]
             ],
             "start_lines": [
               [
-                [587, 510],
-                [24, 512]
+                [1399, 732],
+                [1207, 715]
+              ],
+              [
+                [1200, 712],
+                [1092, 705]
+              ],
+              [
+                [1392, 724],
+                [1474, 732]
               ]
             ],
             "end_lines": [
               [
-                [605, 397],
-                [249, 394]
+                [1392, 928],
+                [1392, 926]
+              ],
+              [
+                [1229, 1017],
+                [187, 868]
               ]
             ],
-            "distance_m": 40.0
+            "distance_m": 26.0
           }
-        },
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM1",
+      "video_path": "D:/Vehicle_Speed_Detector/testvideo/C 60-1.MTS",
+      "evidence_root": "evidence",
+      "pre_event_seconds": 3.0,
+      "post_event_seconds": 1.0,
+      "min_contour_area": 900,
+      "max_match_distance_px": 75.0,
+      "fps_override": null,
+      "detector": {
+        "type": "yolo",
+        "yolo_model_path": "yolo11n.pt",
+        "confidence": 0.35,
+        "iou": 0.45,
+        "classes": [2, 3, 5, 7]
+      },
+      "lanes": [
         {
-          "lane_id": "lane_2",
-          "name": "Lane 2",
-          "speed_limit_kmph": 70.0,
+          "lane_id": "lane_1",
+          "name": "Lane 1",
+          "speed_limit_kmph": 40.0,
           "polygon": [
-            [651, 256],
-            [666, 701],
-            [1257, 638],
-            [1219, 488],
-            [791, 245]
+            [58, 854],
+            [17, 1053],
+            [1015, 1051],
+            [1169, 1032],
+            [1282, 772],
+            [1286, 660],
+            [1123, 652],
+            [1037, 664]
           ],
           "measurement": {
             "start_line": [
-              [663, 360],
-              [904, 351]
+              [1296, 763],
+              [1289, 760]
             ],
             "end_line": [
-              [703, 585],
-              [1251, 528]
+              [1166, 1020],
+              [38, 921]
             ],
             "start_lines": [
               [
-                [663, 360],
-                [904, 351]
+                [1296, 763],
+                [1289, 760]
+              ],
+              [
+                [1258, 784],
+                [893, 772]
+              ],
+              [
+                [888, 772],
+                [694, 739]
               ]
             ],
             "end_lines": [
               [
-                [703, 585],
-                [1251, 528]
+                [1166, 1020],
+                [38, 921]
               ]
             ],
             "distance_m": 30.0
           }
         }
       ]
+    },
+    {
+      "camera_id": "cam 06",
+      "video_path": "D:/Vehicle_Speed_Detector/testvideo/60-2.MTS",
+      "evidence_root": "evidence",
+      "pre_event_seconds": 3.0,
+      "post_event_seconds": 1.0,
+      "min_contour_area": 900,
+      "max_match_distance_px": 75.0,
+      "fps_override": null,
+      "detector": {
+        "type": "yolo",
+        "yolo_model_path": "yolo11n.pt",
+        "confidence": 0.35,
+        "iou": 0.45,
+        "classes": [2, 3, 5, 7]
+      },
+      "lanes": [
+        {
+          "lane_id": "lane_1",
+          "name": "Lane 1",
+          "speed_limit_kmph": 30.0,
+          "polygon": [
+            [0, 1063],
+            [1182, 1063],
+            [1474, 723],
+            [1434, 599],
+            [1240, 599],
+            [400, 763]
+          ],
+          "measurement": {
+            "start_line": [
+              [1474, 725],
+              [1468, 715]
+            ],
+            "end_line": [
+              [1240, 989],
+              [736, 937]
+            ],
+            "start_lines": [
+              [
+                [1474, 725],
+                [1468, 715]
+              ],
+              [
+                [1470, 721],
+                [1096, 711]
+              ],
+              [
+                [1100, 709],
+                [884, 671]
+              ]
+            ],
+            "end_lines": [
+              [
+                [1240, 989],
+                [736, 937]
+              ],
+              [
+                [736, 929],
+                [732, 925]
+              ],
+              [
+                [740, 935],
+                [444, 863]
+              ],
+              [
+                [442, 855],
+                [326, 819]
+              ],
+              [
+                [450, 855],
+                [436, 851]
+              ],
+              [
+                [462, 859],
+                [440, 867]
+              ],
+              [
+                [462, 865],
+                [444, 853]
+              ]
+            ],
+            "distance_m": 30.0
+          }
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM05",
+      "video_path": "",
+      "evidence_root": "evidence",
+      "pre_event_seconds": 3.0,
+      "post_event_seconds": 1.0,
+      "min_contour_area": 900,
+      "max_match_distance_px": 75.0,
+      "fps_override": null,
+      "detector": {
+        "type": "yolo",
+        "yolo_model_path": "yolo11n.pt",
+        "confidence": 0.35,
+        "iou": 0.45,
+        "classes": [2, 3, 5, 7]
+      },
+      "lanes": []
     }
   ]
 }

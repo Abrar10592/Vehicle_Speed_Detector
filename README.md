@@ -55,21 +55,24 @@ The landing page leads to two sections:
 
 ### Calibration
 - Select, add, remove and rename cameras in the sidebar; each camera has its own settings, video and lanes.
-- Pick each camera's video with **Browse...** (its first frame is the drawing background).
+- Pick each camera's video with **Browse...** (mp4, avi, mov, mkv, or camcorder mts/m2ts; its first frame is the drawing background).
 - Select detector type (`motion` or `yolo`) and YOLO parameters.
-- Define lane geometry for each lane:
-	- polygon points
-	- start line
-	- end line
+- Define lane geometry for each lane in the full-width **Draw** section:
+	- lane area: click each corner, then click the first corner again to close the polygon (an unclosed polygon is not saved)
+	- start line (blue) and end line (red): press at one end and drag to the other
 	- measured distance (meters)
-- Preview overlays on a sample image/video frame.
+- **Drawing size** scales the frame to fit the screen (800 px fits a laptop); coordinates are always saved at the video's full resolution. The toolbar above the drawing has Undo, Redo, Edit (move or resize a shape) and Reset.
 - Save calibration JSON (example: `config/calibration.json`).
 
 ### Calibration tips
 Where the lines are drawn decides how many vehicles get a speed:
-- Put both lines where vehicles are big enough to be detected reliably (near/middle of the image). A vehicle only gets a speed if it is tracked across the start line and then the end line, so a line drawn in the far distance is crossed before the detector sees the vehicle.
+- Vehicles are timed at the point where they touch the road (the bottom center of their box), so draw lanes and lines on the road surface.
+- Put both lines where vehicles are big enough to be detected reliably (near/middle of the image), and where the whole vehicle, wheels included, is still inside the picture. A vehicle only gets a speed if it is tracked across both lines, so a line drawn in the far distance is crossed before the detector sees the vehicle, and a line at the edge of the picture is crossed after the vehicle's box has been cut off.
+- The lines work in both directions: whichever one a vehicle crosses first starts the timer. Each lane has one speed limit, so give opposite directions separate lanes if their limits differ.
+- Prefer a straight stretch of road: a vehicle that bends between the lines travels a different distance.
+- Calibration belongs to one camera position. If the camera is moved, zoomed or knocked, even slightly, redo it.
 - Draw each line across the full width of the carriageway and perpendicular to the traffic (in this camera view that is close to horizontal), so every lane travels the same distance between them.
-- Draw the lane polygon over the whole carriageway, down to the bottom of the frame; anything outside it is masked out before detection.
+- Draw the lane polygon over the whole carriageway, down to the bottom of the frame; vehicles whose wheels are outside it are ignored.
 - Measure `distance_m` along the road. Lane dashes are a convenient ruler: on UK motorways a dash plus its gap is 9 m, so lines placed on the ends of dashes N cycles apart are N x 9 m apart.
 
 The default `config/calibration.json` is a calibration for `videos/sample_two_lane.mp4` built this way. The dashboard loads it on start; saving overwrites it.
@@ -116,5 +119,6 @@ Arguments:
 
 ## Notes
 - This version is optimized for low-traffic recorded videos.
+- Speeds depend on the frame rate read from the video. For camcorder `.mts` files, compare the `frame rate` line printed at the start of a run with the file's frame rate in MediaInfo; if they differ, set the correct value with **Use FPS override** in Calibration.
 - YOLO is recommended for better accuracy in dense traffic and low-light scenes.
 - For production accuracy, perform lane-wise calibration after any camera movement.

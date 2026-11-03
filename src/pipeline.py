@@ -15,7 +15,7 @@ import numpy as np
 from .config import AppConfig, LaneConfig, list_camera_ids, load_config
 from .detector import MotionVehicleDetector, YoloVehicleDetector
 from .evidence import EvidenceRecorder
-from .geometry import crossed_line
+from .geometry import crossed_line, road_point
 from .live import STOP_FILE_NAME, LiveWriter, write_status
 from .models import SpeedEvent
 from .tracker import CentroidTracker
@@ -90,7 +90,7 @@ def _draw_overlay(
     frame: np.ndarray,
     config: AppConfig,
     track_boxes: dict[int, BBox],
-    track_centroids: dict[int, tuple[int, int]],
+    track_road_points: dict[int, tuple[int, int]],
     measured_by_track: dict[int, SpeedEvent],
     measuring_ids: set[int],
     recent_events: list[SpeedEvent],
@@ -129,8 +129,8 @@ def _draw_overlay(
             color = COLOR_TRACKED
 
         cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-        if track_id in track_centroids:
-            cv2.circle(out, track_centroids[track_id], 3, (0, 255, 255), -1)
+        if track_id in track_road_points:
+            cv2.circle(out, track_road_points[track_id], 3, (0, 255, 255), -1)
         cv2.putText(
             out,
             f"ID {track_id}",
@@ -229,6 +229,7 @@ def run(
     stop_file = Path(live_dir) / STOP_FILE_NAME if live_dir else None
     source = open_source(video_path, config.fps_override, realtime)
     fps = source.fps
+    print(f"Camera {config.camera_id}: frame rate {fps:g} fps")
 
     def stop_requested() -> bool:
         return bool(stop_event and stop_event.is_set()) or bool(stop_file and stop_file.exists())
@@ -286,7 +287,7 @@ def run(
     _prepare_event_csv(events_csv_path)
 
     lane_track_state: dict[tuple[int, str], dict[str, float | bool | int]] = {}
-    prev_centroids: dict[int, tuple[int, int]] = {}
+    prev_road_points: dict[int, tuple[int, int]] = {}
     measured_by_track: dict[int, SpeedEvent] = {}
     # (frame_index, bbox) per track; long enough to cover the evidence pre-event window.
     history_len = max(120, evidence.pre_frames + 1)
@@ -305,7 +306,7 @@ def run(
         # Boxes of vehicles actually detected in this frame (the tracker also returns recently lost tracks at
         # their last position); evidence clips only mark the offender where it was really seen.
         observed_boxes: dict[int, BBox] = {}
-        track_centroids: dict[int, tuple[int, int]] = {}
+        track_road_points: dict[int, tuple[int, int]] = {}
         debug_state_by_track: dict[int, str] = {}
         measuring_ids: set[int] = set()
         speeding: list[tuple[SpeedEvent, dict[int, BBox]]] = []
@@ -313,35 +314,36 @@ def run(
         for track in tracks:
             x1, y1, x2, y2 = track.bbox
             bbox = (int(x1), int(y1), int(x2), int(y2))
+            point = road_point(bbox)
             track_boxes[track.track_id] = bbox
-            track_centroids[track.track_id] = track.centroid
+            track_road_points[track.track_id] = point
 
             history = track_history.setdefault(track.track_id, deque(maxlen=history_len))
             if track.last_seen_ts == timestamp_s:
                 observed_boxes[track.track_id] = bbox
                 history.append((frame_index, bbox))
 
-            lane = _lane_for_point(track.centroid, config.lanes)
+            lane = _lane_for_point(point, config.lanes)
             if lane is None:
                 debug_state_by_track[track.track_id] = "lane=- in=0 start=0 end=0"
-                prev_centroids[track.track_id] = track.centroid
+                prev_road_points[track.track_id] = point
                 continue
 
             key = (track.track_id, lane.lane_id)
             if key not in lane_track_state:
                 lane_track_state[key] = {
-                    "start_crossed": False,
+                    "first_line": None,  # "start" or "end": traffic may cross the lines in either order
                     "start_ts": 0.0,
                     "start_frame": 0,
                     "done": False,
                 }
 
-            if track.track_id not in prev_centroids:
-                prev_centroids[track.track_id] = track.centroid
+            if track.track_id not in prev_road_points:
+                prev_road_points[track.track_id] = point
                 continue
 
-            previous = prev_centroids[track.track_id]
-            current = track.centroid
+            previous = prev_road_points[track.track_id]
+            current = point
             state = lane_track_state[key]
 
             crossed_any_start = any(
@@ -351,16 +353,13 @@ def run(
                 crossed_line(previous, current, end_line) for end_line in lane.measurement.end_lines
             )
 
-            if not state["start_crossed"] and crossed_any_start:
-                state["start_crossed"] = True
+            if state["first_line"] is None and (crossed_any_start or crossed_any_end):
+                state["first_line"] = "start" if crossed_any_start else "end"
                 state["start_ts"] = timestamp_s
                 state["start_frame"] = frame_index
 
-            if (
-                state["start_crossed"]
-                and not state["done"]
-                and crossed_any_end
-            ):
+            crossed_other_line = crossed_any_end if state["first_line"] == "start" else crossed_any_start
+            if state["first_line"] is not None and not state["done"] and crossed_other_line:
                 elapsed_s = max(0.001, timestamp_s - float(state["start_ts"]))
                 speed_kmph = (lane.measurement.distance_m / elapsed_s) * 3.6
 
@@ -387,14 +386,14 @@ def run(
 
                 state["done"] = True
 
-            if state["start_crossed"] and not state["done"]:
+            if state["first_line"] is not None and not state["done"]:
                 measuring_ids.add(track.track_id)
 
             debug_state_by_track[track.track_id] = (
-                f"lane={lane.lane_id} in=1 start={int(bool(state['start_crossed']))} end={int(bool(state['done']))}"
+                f"lane={lane.lane_id} in=1 start={int(state['first_line'] is not None)} end={int(bool(state['done']))}"
             )
 
-            prev_centroids[track.track_id] = track.centroid
+            prev_road_points[track.track_id] = point
 
         evidence.push_frame(frame, frame_index, observed_boxes)
         for event, boxes_by_frame in speeding:
@@ -408,7 +407,7 @@ def run(
                 frame,
                 config,
                 track_boxes,
-                track_centroids,
+                track_road_points,
                 measured_by_track,
                 measuring_ids,
                 list(recent_events),
@@ -423,7 +422,7 @@ def run(
         # The tracker never reuses an ID, so state for tracks it has dropped can be released.
         for track_id in [t for t in track_history if t not in track_boxes]:
             del track_history[track_id]
-            prev_centroids.pop(track_id, None)
+            prev_road_points.pop(track_id, None)
             measured_by_track.pop(track_id, None)
         for key in [k for k in lane_track_state if k[0] not in track_boxes]:
             del lane_track_state[key]

@@ -6,5 +6,9 @@ runtime/
 *.avi
 *.mkv
 *.mov
+*.mts
+*.MTS
+*.m2ts
+*.M2TS
 videos/
 evidence/

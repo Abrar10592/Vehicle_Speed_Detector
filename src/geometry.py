@@ -6,6 +6,16 @@ Point = Tuple[int, int]
 Line = Tuple[Point, Point]
 
 
+def road_point(bbox: tuple[int, int, int, int]) -> Point:
+    """Where a vehicle meets the road in the image: the bottom center of its box.
+
+    Lanes and lines are drawn on the road surface. The center of the box floats above the road, by a large
+    and changing amount on a low camera, so it would reach the lines much later than the vehicle or never.
+    """
+    x1, _, x2, y2 = bbox
+    return (x1 + x2) // 2, y2
+
+
 def _orientation(a: Point, b: Point, c: Point) -> int:
     value = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
     if value == 0:

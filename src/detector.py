@@ -5,6 +5,7 @@ from typing import List
 import cv2
 import numpy as np
 
+from .geometry import road_point
 from .models import Detection
 
 
@@ -59,15 +60,12 @@ class YoloVehicleDetector:
         self.classes = classes if classes is not None else [2, 3, 5, 7]
 
     def detect(self, frame: np.ndarray, roi_mask: np.ndarray | None = None) -> List[Detection]:
-        if roi_mask is not None:
-            masked = cv2.bitwise_and(frame, frame, mask=roi_mask)
-        else:
-            masked = frame
-
+        # YOLO sees the whole frame and the lanes only filter its results: blacking out everything outside them
+        # would cut vehicles in half, because most of a vehicle stands above the road it drives on.
         # agnostic_nms: one vehicle detected as both e.g. "car" and "truck" must yield a single box,
         # otherwise it becomes two tracks and gets measured twice.
         results = self.model.predict(
-            source=masked,
+            source=frame,
             conf=self.confidence,
             iou=self.iou,
             classes=self.classes,
@@ -86,6 +84,10 @@ class YoloVehicleDetector:
         for box in result.boxes:
             xyxy = box.xyxy[0].tolist()
             x1, y1, x2, y2 = [int(v) for v in xyxy]
+            if roi_mask is not None:
+                x, y = road_point((x1, y1, x2, y2))
+                if roi_mask[min(y, roi_mask.shape[0] - 1), min(x, roi_mask.shape[1] - 1)] == 0:
+                    continue
             score = float(box.conf[0].item()) if box.conf is not None else 1.0
             detections.append(Detection(bbox=(x1, y1, x2, y2), score=score, class_name="vehicle"))
 

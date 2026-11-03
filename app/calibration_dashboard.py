@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -21,6 +22,17 @@ POLYGON_COLOR = "#00FF00"
 START_LINE_COLOR = "#00AAFF"
 END_LINE_COLOR = "#FF0000"
 LINE_COLOR_BY_MODE = {"start_line": START_LINE_COLOR, "end_line": END_LINE_COLOR}
+MODE_LABELS = {"polygon": "Lane area (polygon)", "start_line": "Start line", "end_line": "End line"}
+MODE_HELP = {
+    "polygon": "Click each corner of the lane area, then **click the first corner again to close it**. "
+    "A polygon that is not closed is not kept.",
+    "start_line": "Press at one end of the **start line** (blue) and drag to the other end. "
+    "Several pieces are allowed; together they form the line.",
+    "end_line": "Press at one end of the **end line** (red) and drag to the other end. "
+    "Several pieces are allowed; together they form the line.",
+}
+# Width options for the drawing; the frame is scaled to fit and coordinates are saved at full video resolution.
+CANVAS_WIDTHS = [640, 800, 960, 1120, 1280, 1600, 1920]
 
 DETECTOR_OPTIONS = ["motion", "yolo"]
 DEFAULT_CAMERA = {
@@ -58,92 +70,105 @@ def load_preview_image(uploaded_file, video_path: str) -> np.ndarray | None:
     return None
 
 
+def hex_to_bgr(color: str) -> tuple[int, int, int]:
+    r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
+    return b, g, r
+
+
 def draw_lane_overlay(image: np.ndarray, lane_state: dict) -> np.ndarray:
+    """The lane's saved geometry, in the same colors as the drawing tools."""
     out = image.copy()
+    unit = max(1.0, image.shape[1] / 1280)  # keeps marks visible on large frames shown scaled down
     polygon = np.array(lane_state.get("polygon", []), dtype=np.int32)
     if len(polygon) >= 3:
-        cv2.polylines(out, [polygon], True, (0, 255, 255), 2)
+        cv2.polylines(out, [polygon], True, hex_to_bgr(POLYGON_COLOR), round(2 * unit))
 
     measurement = lane_state.get("measurement", {})
-    start_lines = measurement.get("start_lines") or ([] if len(measurement.get("start_line", [])) != 2 else [measurement.get("start_line", [])])
-    end_lines = measurement.get("end_lines") or ([] if len(measurement.get("end_line", [])) != 2 else [measurement.get("end_line", [])])
-    for start_line in start_lines:
-        if len(start_line) == 2:
-            cv2.line(out, tuple(start_line[0]), tuple(start_line[1]), (0, 255, 0), 3)
-    for end_line in end_lines:
-        if len(end_line) == 2:
-            cv2.line(out, tuple(end_line[0]), tuple(end_line[1]), (0, 0, 255), 3)
+    for mode, color in LINE_COLOR_BY_MODE.items():
+        lines = measurement.get(f"{mode}s") or ([measurement[mode]] if len(measurement.get(mode) or []) == 2 else [])
+        for line in lines:
+            if len(line) == 2:
+                cv2.line(out, tuple(line[0]), tuple(line[1]), hex_to_bgr(color), round(3 * unit))
 
     if len(polygon):
         x, y = polygon[0]
         cv2.putText(
             out,
             f"{lane_state['lane_id']} limit={lane_state['speed_limit_kmph']}",
-            (int(x), max(20, int(y) - 8)),
+            (int(x), max(round(20 * unit), int(y) - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+            0.6 * unit,
             (255, 255, 255),
-            2,
+            round(2 * unit),
             cv2.LINE_AA,
         )
     return out
 
 
-def simplify_polygon(points: list[list[int]]) -> list[list[int]]:
-    if len(points) < 3:
-        return points
-    contour = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
-    epsilon = 0.02 * cv2.arcLength(contour, True)
-    approx = cv2.approxPolyDP(contour, epsilon, True)
-    simplified = approx.reshape(-1, 2).tolist()
-    return simplified if len(simplified) >= 3 else points
+def drop_repeated_points(points: list[list[int]]) -> list[list[int]]:
+    """Remove accidental double clicks; every corner the user placed is kept."""
+    kept: list[list[int]] = []
+    for point in points:
+        if not kept or point != kept[-1]:
+            kept.append(point)
+    if len(kept) > 1 and kept[0] == kept[-1]:
+        kept.pop()  # closing click on the first corner
+    return kept
 
 
-def polygon_canvas_to_points(canvas_data: dict | None) -> list[list[int]]:
+def placed(obj: dict, dx: float, dy: float) -> tuple[float, float]:
+    """Canvas position of a point given as an offset from the object's center.
+
+    Fabric keeps a shape's own points as drawn and records moves, resizes and rotations made with the toolbar's
+    Edit button separately (center left/top, scaleX/Y, angle), so they are applied here.
+    """
+    sx, sy = float(obj.get("scaleX") or 1), float(obj.get("scaleY") or 1)
+    angle = math.radians(float(obj.get("angle") or 0))
+    dx, dy = dx * sx, dy * sy
+    return (
+        float(obj.get("left", 0)) + dx * math.cos(angle) - dy * math.sin(angle),
+        float(obj.get("top", 0)) + dx * math.sin(angle) + dy * math.cos(angle),
+    )
+
+
+def polygon_canvas_to_points(canvas_data: dict | None, to_image) -> list[list[int]]:
+    """The most recently drawn closed polygon, in image coordinates (`to_image` maps canvas -> image)."""
     if canvas_data is None:
         return []
     objects = canvas_data.get("objects", [])
-    raw_points: list[tuple[int, int]] = []
+    raw_points: list[list[int]] = []
     for obj in reversed(objects):  # most recently drawn polygon wins
         obj_type = str(obj.get("type", "")).lower()
         if obj_type == "polygon":
-            for point in obj.get("points", []):
-                if isinstance(point, dict):
-                    raw_points.append((int(round(point.get("x", 0))), int(round(point.get("y", 0)))))
-                elif isinstance(point, (list, tuple)) and len(point) >= 2:
-                    raw_points.append((int(round(point[0])), int(round(point[1]))))
+            points = [(p["x"], p["y"]) if isinstance(p, dict) else (p[0], p[1]) for p in obj.get("points", [])]
+            if points:
+                xs, ys = [x for x, _ in points], [y for _, y in points]
+                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2  # the polygon's center as drawn
+                raw_points = [to_image(*placed(obj, x - cx, y - cy)) for x, y in points]
             break
         if obj_type == "path":
             for step in obj.get("path", []):
                 if len(step) >= 3 and step[0] in {"M", "L"}:
-                    raw_points.append((int(round(step[1])), int(round(step[2]))))
+                    raw_points.append(to_image(step[1], step[2]))
             break
-    return simplify_polygon([[x, y] for x, y in raw_points])
+    return drop_repeated_points(raw_points)
 
 
-def lines_canvas_to_points(canvas_data: dict | None, stroke: str) -> list[list[list[int]]]:
-    """Return all line objects drawn with the given stroke color, in drawing order."""
+def lines_canvas_to_points(canvas_data: dict | None, stroke: str, to_image) -> list[list[list[int]]]:
+    """All line objects drawn with the given stroke color, in drawing order, in image coordinates."""
     if canvas_data is None:
         return []
 
     lines: list[list[list[int]]] = []
-    objects = canvas_data.get("objects", [])
-    for obj in objects:
+    for obj in canvas_data.get("objects", []):
         obj_type = str(obj.get("type", "")).lower()
         if obj_type != "line" or str(obj.get("stroke", "")).upper() != stroke.upper():
             continue
-        # Fabric/Canvas stores line endpoints relative to the object center.
-        # Convert them back to absolute canvas coordinates before saving.
-        left = float(obj.get("left", 0))
-        top = float(obj.get("top", 0))
-        x1 = float(obj.get("x1", 0))
-        y1 = float(obj.get("y1", 0))
-        x2 = float(obj.get("x2", 0))
-        y2 = float(obj.get("y2", 0))
-
-        p1 = (int(round(left + x1)), int(round(top + y1)))
-        p2 = (int(round(left + x2)), int(round(top + y2)))
-        lines.append([[p1[0], p1[1]], [p2[0], p2[1]]])
+        # Fabric stores line endpoints as offsets from the line's center.
+        p1 = to_image(*placed(obj, float(obj.get("x1", 0)), float(obj.get("y1", 0))))
+        p2 = to_image(*placed(obj, float(obj.get("x2", 0)), float(obj.get("y2", 0))))
+        if p1 != p2:  # a click without a drag
+            lines.append([p1, p2])
 
     return lines
 
@@ -161,7 +186,6 @@ def blank_lane_state(lane_id: str, name: str, speed_limit_kmph: float = 40.0) ->
             "end_lines": [],
             "distance_m": 10.0,
         },
-        "canvas_json": None,
     }
 
 
@@ -187,43 +211,28 @@ def geometry_status(lane_state: dict) -> str:
     return " · ".join(f"{name} {'✅' if ok else '❌'}" for name, ok in marks.items())
 
 
-def build_initial_drawing(lane_state: dict) -> dict | None:
-    canvas_json = lane_state.get("canvas_json")
-    if canvas_json:
-        return canvas_json
+def apply_drawing(lane_state: dict, canvas_json: dict | None, mode: str, to_image) -> str | None:
+    """Store the canvas drawing for `mode` in the lane. Returns what is missing from the drawing, or None."""
+    if mode == "polygon":
+        polygon = polygon_canvas_to_points(canvas_json, to_image)
+        if len(polygon) < 3:
+            return "No closed polygon on the canvas yet. Click each corner, then click the first corner again to close it."
+        lane_state["polygon"] = polygon
+        return None
+
+    # Only lines drawn in this mode's color belong to it; the other mode's lines share the canvas.
+    lines = lines_canvas_to_points(canvas_json, LINE_COLOR_BY_MODE[mode], to_image)
+    if not lines:
+        return f"No {MODE_LABELS[mode].lower()} on the canvas yet. Press at one end of the line and drag to the other."
+    measurement = lane_state.setdefault("measurement", {})
+    measurement[f"{mode}s"] = lines
+    measurement[mode] = lines[0]
     return None
 
 
-def update_lane_state_from_canvas(lane_state: dict, canvas_json: dict, mode: str) -> bool:
-    changed = False
-
-    if mode == "polygon":
-        polygon = polygon_canvas_to_points(canvas_json)
-        if len(polygon) >= 3 and polygon != lane_state.get("polygon", []):
-            lane_state["polygon"] = polygon
-            changed = True
-
-    if mode in {"start_line", "end_line"}:
-        # Only lines drawn in this mode's color belong to it; the other mode's lines share the canvas.
-        lines_points = lines_canvas_to_points(canvas_json, LINE_COLOR_BY_MODE[mode])
-        measurement = lane_state.setdefault("measurement", {})
-        lines_key = "start_lines" if mode == "start_line" else "end_lines"
-
-        # An empty canvas never erases saved lines (use "Reset lane geometry" for that).
-        if lines_points and lines_points != measurement.get(lines_key, []):
-            measurement[lines_key] = lines_points
-            measurement[mode] = lines_points[0]
-            changed = True
-
-    if canvas_json != lane_state.get("canvas_json"):
-        lane_state["canvas_json"] = canvas_json
-        changed = True
-
-    return changed
-
-
-def image_to_canvas_background(image: np.ndarray) -> Image.Image:
-    return Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+def image_to_canvas_background(image: np.ndarray, width: int, height: int) -> Image.Image:
+    small = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    return Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
 
 
 def load_saved_config(path: str) -> dict:
@@ -258,7 +267,6 @@ def lane_state_from_config(lane: dict, index: int) -> dict:
         state["measurement"][f"{mode}s"] = [[list(p) for p in line] for line in lines]
         state["measurement"][mode] = state["measurement"][f"{mode}s"][0] if lines else []
     state["measurement"]["distance_m"] = float(measurement.get("distance_m", 10.0))
-    state["canvas_json"] = lane.get("canvas_json")
     return state
 
 
@@ -275,7 +283,7 @@ def browse_for_video() -> str | None:
     path = filedialog.askopenfilename(
         title="Select a video",
         initialdir=str(Path(VIDEO_FOLDER).resolve()) if Path(VIDEO_FOLDER).is_dir() else None,
-        filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")],
+        filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv *.mts *.m2ts"), ("All files", "*.*")],
     )
     root.destroy()
     return path or None
@@ -536,7 +544,7 @@ with left:
                 st.rerun()
 
 with right:
-    st.subheader("Preview and Drawing")
+    st.subheader("Video")
     col_video, col_browse = st.columns([4, 1], vertical_alignment="bottom")
     col_video.text_input(
         "Video file or live stream (its first frame is the preview)",
@@ -547,74 +555,91 @@ with right:
     uploaded_image = st.file_uploader("Or upload a sample frame image", type=["jpg", "jpeg", "png"], key=k("upload"))
 
     frame = load_preview_image(uploaded_image, st.session_state[k("video")])
-    active_lane = st.session_state[k("active_lane")]
-    active_lane_state = cam["lanes"][active_lane]
-
     if frame is not None:
-        preview_frame = draw_lane_overlay(frame.copy(), lane_config(uid, active_lane))
-        preview_rgb = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
-        height, width = preview_rgb.shape[:2]
-
-        st.image(preview_rgb, caption="Calibration preview", width="stretch")
-        st.markdown(f"#### Editing: {st.session_state[k(f'{active_lane}_name')]}")
-
-        mode = st.radio(
-            "Select geometry to draw", options=["polygon", "start_line", "end_line"], horizontal=True, key=k("mode")
-        )
-
-        # Clears only the drawing; the lane's saved geometry stays until a new drawing is saved.
-        if st.button("Clear current canvas", key=k(f"clear_canvas_{active_lane}")):
-            active_lane_state["canvas_json"] = None
-            cam["canvas_version"] += 1
-            st.rerun()
-
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.08)",
-            stroke_width=3,
-            stroke_color=POLYGON_COLOR if mode == "polygon" else LINE_COLOR_BY_MODE[mode],
-            background_image=image_to_canvas_background(frame),
-            update_streamlit=True,
-            height=height,
-            width=width,
-            drawing_mode="polygon" if mode == "polygon" else "line",
-            initial_drawing=build_initial_drawing(active_lane_state),
-            key=f"canvas_{uid}_{active_lane}_{cam['canvas_version']}",
-        )
-
-        # Drawings are applied to the lane only with this button, so opening the dashboard or
-        # switching modes never changes the loaded calibration.
-        if st.button("Save current drawing to active lane"):
-            if canvas_result.json_data is None:
-                st.warning("Draw on the canvas first.")
-            else:
-                updated = update_lane_state_from_canvas(active_lane_state, canvas_result.json_data, mode)
-                measurement = active_lane_state["measurement"]
-                lines_key = "start_lines" if mode == "start_line" else "end_lines"
-                if mode == "polygon" and len(active_lane_state.get("polygon", [])) < 3:
-                    st.warning("Draw a closed polygon on the canvas first.")
-                elif mode in {"start_line", "end_line"} and not (
-                    len(measurement.get(mode, [])) == 2 or any(len(line) == 2 for line in measurement.get(lines_key, []))
-                ):
-                    st.warning("Draw a complete line on the canvas first.")
-                else:
-                    st.session_state.flash = (
-                        "success",
-                        f"Saved {mode.replace('_', ' ')} for {active_lane}{'' if updated else ' (no changes detected)'}. "
-                        "Press 'Save calibration config' to write it to disk.",
-                    )
-                    st.rerun()
-
-        st.markdown("---")
-        st.subheader("All lanes of this camera")
-        saved_preview = frame.copy()
+        all_lanes = frame.copy()
         for lane_key in lane_options:
             if lane_has_geometry(cam["lanes"][lane_key]):
-                saved_preview = draw_lane_overlay(saved_preview, lane_config(uid, lane_key))
-        st.image(cv2.cvtColor(saved_preview, cv2.COLOR_BGR2RGB), caption="All lanes", width="stretch")
+                all_lanes = draw_lane_overlay(all_lanes, lane_config(uid, lane_key))
+        st.image(cv2.cvtColor(all_lanes, cv2.COLOR_BGR2RGB), caption="All lanes of this camera", width="stretch")
     else:
         st.info("Choose this camera's video (Browse...) or upload a frame image to start calibration.")
+
+# The drawing gets the full page width, so large frames fit without sideways scrolling.
+if frame is not None:
+    active_lane = st.session_state[k("active_lane")]
+    active_lane_state = cam["lanes"][active_lane]
+    height, width = frame.shape[:2]
+
+    st.divider()
+    st.subheader(f"Draw: {st.session_state[k(f'{active_lane}_name')]}")
+    chosen_lane = st.segmented_control(
+        "Lane",
+        lane_options,
+        format_func=lambda key: st.session_state[k(f"{key}_name")],
+        default=active_lane,
+        key=k(f"draw_lane_{active_lane}"),
+    )
+    if chosen_lane and chosen_lane != active_lane:
+        st.session_state[k("active_lane")] = chosen_lane
+        st.rerun()
+
+    st.session_state.setdefault("canvas_width", 800)  # fits a laptop screen; larger sizes for bigger monitors
+    with st.container(horizontal=True, vertical_alignment="bottom", gap="large"):
+        mode = st.radio("What to draw", options=list(MODE_LABELS), format_func=MODE_LABELS.get, horizontal=True, key=k("mode"))
+        st.select_slider(
+            "Drawing size",
+            options=CANVAS_WIDTHS,
+            format_func=lambda w: f"{w} px",
+            key="canvas_width",
+            width=320,
+            help="Pick the largest size that fits on your screen without scrolling sideways.",
+        )
+        # Clears only the drawing; the lane's saved geometry stays until a new drawing is saved.
+        if st.button("Clear drawing", icon=":material/ink_eraser:", key=k(f"clear_canvas_{active_lane}")):
+            cam["canvas_version"] += 1
+            st.rerun()
+    st.caption(
+        MODE_HELP[mode] + " The lane's saved geometry is shown on the picture. The small toolbar above the "
+        "picture's top right corner has Undo, Redo, Edit (move or resize a shape) and Reset."
+    )
+
+    canvas_width = min(st.session_state.canvas_width, width)
+    scale = width / canvas_width
+    canvas_height = round(height / scale)
+
+    def to_image(x: float, y: float) -> list[int]:
+        """Canvas pixel -> full-resolution frame pixel."""
+        return [min(max(round(float(x) * scale), 0), width - 1), min(max(round(float(y) * scale), 0), height - 1)]
+
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 255, 0, 0.12)",
+        stroke_width=3,
+        stroke_color=POLYGON_COLOR if mode == "polygon" else LINE_COLOR_BY_MODE[mode],
+        background_image=image_to_canvas_background(
+            draw_lane_overlay(frame, lane_config(uid, active_lane)), canvas_width, canvas_height
+        ),
+        update_streamlit=True,
+        height=canvas_height,
+        width=canvas_width,
+        drawing_mode="polygon" if mode == "polygon" else "line",
+        key=f"canvas_{uid}_{active_lane}_{cam['canvas_version']}_{canvas_width}",
+    )
+
+    # Drawings are applied to the lane only with this button, so opening the dashboard or
+    # switching modes never changes the loaded calibration.
+    if st.button(f"Save {MODE_LABELS[mode].lower()} to {st.session_state[k(f'{active_lane}_name')]}", type="primary"):
+        problem = apply_drawing(active_lane_state, canvas_result.json_data, mode, to_image)
+        if problem:
+            st.warning(problem)
+        else:
+            st.session_state.flash = (
+                "toast",
+                f"Saved {MODE_LABELS[mode].lower()} for {active_lane}. "
+                "Press 'Save calibration config' to write it to disk.",
+            )
+            st.rerun()
 
 sync_widgets(uid)
 
 st.markdown("---")
-st.caption("Tip: pick one lane at a time, draw polygon/start/end on the preview, save the drawing, then save the config.")
+st.caption("Tip: pick one lane at a time, draw its area, start line and end line, save each drawing, then save the config.")
