@@ -48,6 +48,20 @@ Videos and evidence clips are not stored in Git. On a new computer, copy the `te
 project folder by hand. Start the app from the project folder: video paths inside it are saved in
 `config/calibration.json` relative to it (e.g. `testvideo/50-1.MTS`).
 
+### NVIDIA graphics card (optional)
+The install above gives the processor-only PyTorch. On a computer with an NVIDIA card, swap in the CUDA build of the
+same version: the detector then uses the card by itself and runs about twice as fast (see Live Cameras). Stop the app
+first; the download is 2.6 GB.
+
+```powershell
+pip install "torch==2.14.1+cu126" "torchvision==0.29.1+cu126" --index-url https://download.pytorch.org/whl/cu126
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+The second command must print `True` and the card's name (tested: GeForce GTX 1650, NVIDIA driver 555.97; an older
+driver may need updating). `pip freeze` on that computer lists `torch==2.14.1+cu126`, which the normal package index
+does not have: when refreshing the lock there, keep its `torch` and `torchvision` lines without `+cu126`.
+
 ## The App
 Start it:
 
@@ -92,11 +106,23 @@ Put a camera's stream address in its video field in Calibration instead of a fil
 (Hikvision: `/Streaming/Channels/101`, Dahua: `/cam/realmonitor?channel=1&subtype=0`); check the camera's manual.
 A stream that drops out is reconnected automatically.
 
-Processing speed matters for live streams. Without a GPU this computer processes about 9 frames per second per
-camera with two cameras running. A live stream then has frames skipped (the newest frame is always processed, and
-speeds are timed by capture time), which makes speeds less precise and fast vehicles harder to track. For live use,
-run on a PC with an NVIDIA GPU (CUDA build of PyTorch) or use fewer cameras per PC. Recorded videos are not affected:
-every frame is processed, the monitor just plays slower than real time.
+Processing speed matters for live streams. When a camera sends more frames than the computer processes, frames are
+skipped (the newest frame is always processed, and speeds are timed by capture time), which makes speeds less precise
+and fast vehicles harder to track. Each camera's *fps* in Live monitor should reach the camera's own frame rate.
+Recorded videos are not affected: every frame is processed, the monitor just plays slower than real time.
+
+Measured on the development laptop (Core i5-9300H, GeForce GTX 1650) with 1080p 25 fps video, in frames per second
+per camera:
+
+| Cameras running together | Processor only | With the NVIDIA card |
+|---|---|---|
+| 1 | 14.6 | 30.6 |
+| 2 | 9.6 | 23.5 |
+| 4 | 5.3 | 12.1 |
+
+With the card, the processor is the limit (video decoding, drawing, evidence clips): the card stays under half busy
+and uses under 1 GB of its memory. For more cameras at full frame rate, use a PC with more processor cores or fewer
+cameras per PC.
 
 ## Run Recorded Video Processing
 
