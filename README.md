@@ -32,12 +32,21 @@ Vehicle speed detection for CCTV cameras (live streams) and recorded videos, wit
 - [config/calibration.example.json](config/calibration.example.json): sample calibration config.
 
 ## Install
-1. Create and activate a Python virtual environment.
-2. Install dependencies:
+Needs Python 3.14 and Git. In the project folder:
 
-```bash
-pip install -r requirements.txt
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.lock.txt
 ```
+
+[requirements.lock.txt](requirements.lock.txt) holds the exact package versions the project was tested with, so every
+computer gets the same ones. [requirements.txt](requirements.txt) lists only the direct dependencies with minimum
+versions; after upgrading or adding a package, refresh the lock with `pip freeze > requirements.lock.txt`.
+
+Videos and evidence clips are not stored in Git. On a new computer, copy the `testvideo` and `videos` folders into the
+project folder by hand. Start the app from the project folder: video paths inside it are saved in
+`config/calibration.json` relative to it (e.g. `testvideo/50-1.MTS`).
 
 ## The App
 Start it:

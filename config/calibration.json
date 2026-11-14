@@ -2,7 +2,7 @@
   "cameras": [
     {
       "camera_id": "CAM03",
-      "video_path": "D:/Vehicle_Speed_Detector/testvideo/50-1.MTS",
+      "video_path": "testvideo/50-1.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
@@ -76,7 +76,7 @@
     },
     {
       "camera_id": "CAM04",
-      "video_path": "D:/Vehicle_Speed_Detector/testvideo/60-1.MTS",
+      "video_path": "testvideo/60-1.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
@@ -144,7 +144,7 @@
     },
     {
       "camera_id": "CAM1",
-      "video_path": "D:/Vehicle_Speed_Detector/testvideo/C 60-1.MTS",
+      "video_path": "testvideo/C 60-1.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
@@ -209,7 +209,7 @@
     },
     {
       "camera_id": "cam 06",
-      "video_path": "D:/Vehicle_Speed_Detector/testvideo/60-2.MTS",
+      "video_path": "testvideo/60-2.MTS",
       "evidence_root": "evidence",
       "pre_event_seconds": 3.0,
       "post_event_seconds": 1.0,
