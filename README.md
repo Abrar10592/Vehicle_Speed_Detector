@@ -101,10 +101,14 @@ Where the lines are drawn decides how many vehicles get a speed:
 The default `config/calibration.json` is a calibration for `videos/sample_two_lane.mp4` built this way. The dashboard loads it on start; saving overwrites it.
 
 ## Live Cameras
-Put a camera's stream address in its video field in Calibration instead of a file, e.g.
-`rtsp://user:password@192.168.1.64:554/stream1`. The path after the port depends on the camera brand
-(Hikvision: `/Streaming/Channels/101`, Dahua: `/cam/realmonitor?channel=1&subtype=0`); check the camera's manual.
-A stream that drops out is reconnected automatically.
+In Calibration, press **Live camera...** next to the video field and enter the camera's name, IP address, user name
+and password. **Connect** checks that the camera answers, then fills in its stream address and shows its picture for
+drawing the lanes (**Refresh camera picture** fetches a new one). Hikvision and Dahua are in the brand list; for
+another brand choose *Other* and enter the stream path from the camera's manual.
+
+The stream address can also be typed into the video field by hand, e.g.
+`rtsp://user:password@192.168.1.64:554/stream1` (Hikvision path: `/Streaming/Channels/101`, Dahua:
+`/cam/realmonitor?channel=1&subtype=0`). A stream that drops out is reconnected automatically.
 
 Processing speed matters for live streams. When a camera sends more frames than the computer processes, frames are
 skipped (the newest frame is always processed, and speeds are timed by capture time), which makes speeds less precise

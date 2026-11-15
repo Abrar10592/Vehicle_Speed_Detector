@@ -11,6 +11,8 @@ import streamlit as st
 from streamlit_drawable_canvas import st_canvas  # type: ignore[import-not-found]
 from PIL import Image
 
+from src.video_source import STREAM_PATHS, camera_login, camera_stream_address, grab_stream_frame, is_live_source
+
 
 DEFAULT_OUTPUT_CONFIG = "config/calibration.json"
 DEFAULT_PREVIEW_IMAGE = "config/calibration_preview.jpg"
@@ -49,12 +51,25 @@ DEFAULT_CAMERA = {
 }
 
 
+def live_camera_frame(address: str, refresh: bool = False) -> np.ndarray | None:
+    """A live camera's picture is fetched once and kept: the page reruns on every click, and reconnecting to the
+    camera each time would make drawing slow and change the picture under the drawing."""
+    frames = st.session_state.setdefault("live_frames", {})
+    if refresh or address not in frames:
+        frames[address] = grab_stream_frame(address)
+    return frames[address]
+
+
 def load_preview_image(uploaded_file, video_path: str) -> np.ndarray | None:
     if uploaded_file is not None:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    if video_path.strip():
+    if is_live_source(video_path.strip()):
+        frame = live_camera_frame(video_path.strip())
+        if frame is not None:
+            return frame
+    elif video_path.strip():
         cap = cv2.VideoCapture(video_path.strip())
         ok, sample = cap.read()
         cap.release()
@@ -434,6 +449,45 @@ def on_browse(uid: str) -> None:
         st.session_state.flash = ("info", "No file selected.")
 
 
+@st.dialog("Connect a live camera")
+def live_camera_dialog(uid: str) -> None:
+    values = st.session_state.cams[uid]["values"]
+    saved = camera_login(str(st.session_state.get(skey(uid, "video"), values["video"])))
+    brands = [*STREAM_PATHS, "Other"]
+    saved_brand = next((b for b, path in STREAM_PATHS.items() if path == saved["path"]), "Other" if saved["path"] else brands[0])
+    brand = st.selectbox("Camera brand", brands, index=brands.index(saved_brand))
+
+    with st.form("live_camera", border=False):
+        name = st.text_input("Camera name", value=st.session_state.get(skey(uid, "camera_id"), values["camera_id"]))
+        ip = st.text_input("Camera IP address", value=saved["ip"], placeholder="192.168.1.101")
+        user = st.text_input("User name", value=saved["user"] or "admin")
+        password = st.text_input("Password", value=saved["password"], type="password")
+        path = STREAM_PATHS.get(brand) or st.text_input(
+            "Stream path", value=saved["path"], placeholder="/stream1", help="The part of the stream address after the port; see the camera's manual."
+        )
+        connect = st.form_submit_button("Connect", type="primary")
+
+    if not connect:
+        return
+    ip, name = ip.strip(), name.strip()
+    if not ip or not name or not path.strip():
+        st.error("Fill in the camera name and IP address" + ("." if brand in STREAM_PATHS else ", and the stream path."))
+        return
+    address = camera_stream_address(ip, user.strip(), password, path.strip())
+    with st.spinner("Connecting to the camera..."):
+        frame = grab_stream_frame(address)
+    if frame is None:
+        st.error(
+            "No picture from the camera. Check the IP address, user name and password, "
+            "and that the camera is switched on and connected."
+        )
+        return
+    st.session_state.setdefault("live_frames", {})[address] = frame
+    # The camera's name and video boxes are already on the page; they are filled in at the start of the next run.
+    st.session_state.connected_camera = (uid, name, address)
+    st.rerun()
+
+
 def save_all_cameras() -> None:
     output_path = st.session_state.config_output
     sync_widgets(st.session_state.selected_cam)
@@ -465,6 +519,13 @@ if "cams" not in st.session_state:
     for saved_camera in cameras_from_config(load_saved_config(DEFAULT_OUTPUT_CONFIG)):
         add_camera(saved_camera)
     st.session_state.selected_cam = st.session_state.cam_order[0]
+
+if "connected_camera" in st.session_state:  # from the live camera dialog
+    target, name, address = st.session_state.pop("connected_camera")
+    st.session_state.cams[target]["values"].update(camera_id=name, video=address)
+    st.session_state[skey(target, "camera_id")] = name
+    st.session_state[skey(target, "video")] = address
+    st.session_state.flash = ("success", f"Connected to {name}. Its picture is below; draw the lanes on it.")
 
 with st.sidebar:
     st.header("Cameras")
@@ -545,16 +606,24 @@ with left:
 
 with right:
     st.subheader("Video")
-    col_video, col_browse = st.columns([4, 1], vertical_alignment="bottom")
+    col_video, col_browse, col_live = st.columns([3, 1, 1.4], vertical_alignment="bottom")
     col_video.text_input(
         "Video file or live stream (its first frame is the preview)",
         key=k("video"),
-        help="A video file, or a live camera address such as rtsp://user:password@192.168.1.64:554/stream1",
+        help="A video file (Browse...), or a live camera's address (Live camera... fills it in).",
     )
     col_browse.button("Browse...", on_click=on_browse, args=(uid,), key=k("browse"), width="stretch")
+    if col_live.button("Live camera...", key=k("live"), width="stretch"):
+        live_camera_dialog(uid)
     uploaded_image = st.file_uploader("Or upload a sample frame image", type=["jpg", "jpeg", "png"], key=k("upload"))
 
-    frame = load_preview_image(uploaded_image, st.session_state[k("video")])
+    video = st.session_state[k("video")].strip()
+    if is_live_source(video):
+        if st.button("Refresh camera picture", icon=":material/refresh:", key=k("refresh_live")):
+            live_camera_frame(video, refresh=True)
+        if uploaded_image is None and live_camera_frame(video) is None:
+            st.warning("No picture from this camera. Check its details with Live camera..., then refresh.")
+    frame = load_preview_image(uploaded_image, video)
     if frame is not None:
         all_lanes = frame.copy()
         for lane_key in lane_options:

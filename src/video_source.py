@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from urllib.parse import quote, unquote, urlsplit
 
 import cv2
 import numpy as np
@@ -11,8 +12,45 @@ import numpy as np
 Frame = tuple[np.ndarray, float]  # (image, timestamp in seconds since the source was opened)
 
 
+RTSP_PORT = 554
+# The part of a camera's stream address after the port depends on its brand.
+STREAM_PATHS = {"Hikvision": "/Streaming/Channels/101", "Dahua": "/cam/realmonitor?channel=1&subtype=0"}
+
+
 def is_live_source(source: str) -> bool:
     return "://" in source or source.isdigit()
+
+
+def camera_stream_address(ip: str, user: str, password: str, path: str) -> str:
+    """The RTSP address of a network camera. Characters such as @ : / in the user name or password are escaped."""
+    login = quote(user, safe="")
+    if password:
+        login += ":" + quote(password, safe="")
+    path = path if path.startswith("/") else "/" + path
+    return f"rtsp://{login + '@' if login else ''}{ip}:{RTSP_PORT}{path}"
+
+
+def camera_login(address: str) -> dict[str, str]:
+    """The ip, user, password and path inside an RTSP address (empty strings for anything else)."""
+    parts = urlsplit(address) if address.startswith("rtsp://") else urlsplit("")
+    path = parts.path + ("?" + parts.query if parts.query else "")
+    return {
+        "ip": parts.hostname or "",
+        "user": unquote(parts.username or ""),
+        "password": unquote(parts.password or ""),
+        "path": path,
+    }
+
+
+def grab_stream_frame(address: str, timeout_s: float = 8.0) -> np.ndarray | None:
+    """One picture from a live stream, or None when it does not answer (wrong address, user name or password)."""
+    timeout_ms = int(timeout_s * 1000)
+    cap = cv2.VideoCapture(
+        address, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms, cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms]
+    )
+    ok, frame = cap.read()
+    cap.release()
+    return frame if ok else None
 
 
 def _source_fps(cap: cv2.VideoCapture, fps_override: float | None) -> float:
