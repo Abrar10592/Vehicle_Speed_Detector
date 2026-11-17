@@ -84,11 +84,13 @@ The landing page leads to two sections:
 	- lane area: click each corner, then click the first corner again to close the polygon (an unclosed polygon is not saved)
 	- start line (blue) and end line (red): press at one end and drag to the other
 	- measured distance (meters)
+- **Place the line ends exactly** (below the drawing, once a line is saved): choose a line end and click in the magnified picture exactly where the line must touch the road. Do this for every end of both lines; see the first calibration tip.
 - **Drawing size** scales the frame to fit the screen (800 px fits a laptop); coordinates are always saved at the video's full resolution. The toolbar above the drawing has Undo, Redo, Edit (move or resize a shape) and Reset.
 - Save calibration JSON (example: `config/calibration.json`).
 
 ### Calibration tips
-Where the lines are drawn decides how many vehicles get a speed:
+Where the lines are drawn decides how accurate the speeds are and how many vehicles get one:
+- Mark both ends of each line on the road (a cone or paint mark on each side) and put each line end exactly where its mark meets the ground, with **Place the line ends exactly**. Far from a low camera one pixel covers a long stretch of road: in a trial with a camera about 2 m high and a line 28 m away, a line drawn 20 pixels too high (through the middle of the cone instead of its base) added about 4 m to a 20 m distance, and every speed read about 15% low.
 - Vehicles are timed at the point where they touch the road (the bottom center of their box), so draw lanes and lines on the road surface.
 - Put both lines where vehicles are big enough to be detected reliably (near/middle of the image), and where the whole vehicle, wheels included, is still inside the picture. A vehicle only gets a speed if it is tracked across both lines, so a line drawn in the far distance is crossed before the detector sees the vehicle, and a line at the edge of the picture is crossed after the vehicle's box has been cut off.
 - The lines work in both directions: whichever one a vehicle crosses first starts the timer. Each lane has one speed limit, so give opposite directions separate lanes if their limits differ.
@@ -115,8 +117,17 @@ skipped (the newest frame is always processed, and speeds are timed by capture t
 and fast vehicles harder to track. Each camera's *fps* in Live monitor should reach the camera's own frame rate.
 Recorded videos are not affected: every frame is processed, the monitor just plays slower than real time.
 
-Measured on the development laptop (Core i5-9300H, GeForce GTX 1650) with 1080p 25 fps video, in frames per second
-per camera:
+A line is crossed between two processed frames; the moment is worked out from the vehicle's position before and
+after, so a lower frame rate costs little accuracy (a recorded pass read 34.4 km/h at 25 fps and 34.2 km/h at 12.5).
+
+Small, distant vehicles: the detector searches the area around the lanes instead of the whole frame, and when one
+line is much shorter in the picture than the other (much farther away), the surroundings of that far line are
+searched a second time at full resolution. Without it a motorcycle 28 m from a 4-megapixel camera was only found
+after it had passed the far line and got no speed. The second search takes time: about a third fewer frames per
+second on such a camera. A far line that is closer to the camera, or a camera with a longer lens, needs it less.
+
+The table below was measured before the second search was added, on the development laptop (Core i5-9300H,
+GeForce GTX 1650) with 1080p 25 fps video, in frames per second per camera:
 
 | Cameras running together | Processor only | With the NVIDIA card |
 |---|---|---|

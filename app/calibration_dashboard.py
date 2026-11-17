@@ -35,6 +35,10 @@ MODE_HELP = {
 }
 # Width options for the drawing; the frame is scaled to fit and coordinates are saved at full video resolution.
 CANVAS_WIDTHS = [640, 800, 960, 1120, 1280, 1600, 1920]
+# Zoomed placement of line ends: magnifications, and the size of the magnified picture on screen.
+ZOOM_LEVELS = [2, 4, 6, 10]
+ZOOM_VIEW_SIZE = (840, 480)
+LINE_JOIN_PX = 12  # ends of two pieces of one line this close together are one corner and move together
 
 DETECTOR_OPTIONS = ["motion", "yolo"]
 DEFAULT_CAMERA = {
@@ -242,6 +246,80 @@ def apply_drawing(lane_state: dict, canvas_json: dict | None, mode: str, to_imag
     measurement = lane_state.setdefault("measurement", {})
     measurement[f"{mode}s"] = lines
     measurement[mode] = lines[0]
+    return None
+
+
+def line_ends(lane_state: dict) -> list[tuple[str, int, int]]:
+    """Every end of the lane's start and end lines, as (mode, piece number, 0 or 1)."""
+    measurement = lane_state.get("measurement") or {}
+    return [
+        (mode, piece, end)
+        for mode in LINE_COLOR_BY_MODE
+        for piece, line in enumerate(measurement.get(f"{mode}s") or [])
+        if len(line) == 2
+        for end in range(2)
+    ]
+
+
+def line_end_label(lane_state: dict, line_end: tuple[str, int, int]) -> str:
+    mode, piece, end = line_end
+    lines = lane_state["measurement"][f"{mode}s"]
+    side = "left" if lines[piece][end][0] <= lines[piece][1 - end][0] else "right"
+    piece_text = f", piece {piece + 1}" if len(lines) > 1 else ""
+    return f"{MODE_LABELS[mode]}{piece_text}: {side} end"
+
+
+def move_line_end(lane_state: dict, line_end: tuple[str, int, int], point: list[int]) -> None:
+    """Move one end of a line. Ends of the line's other pieces that were drawn onto it move with it."""
+    mode, piece, end = line_end
+    lines = lane_state["measurement"][f"{mode}s"]
+    old = tuple(lines[piece][end])
+    for line in lines:
+        for k in range(2):
+            if math.dist(line[k], old) <= LINE_JOIN_PX:
+                line[k] = list(point)
+    lines[piece][end] = list(point)
+    lane_state["measurement"][mode] = lines[0]
+
+
+def zoomed_view(frame: np.ndarray, lane_state: dict, line_end: tuple[str, int, int], zoom: int) -> tuple[np.ndarray, int, int]:
+    """The frame around a line end, magnified `zoom` times, with the lane's lines and a cross on that end.
+
+    Returns the picture and the frame position of its top left corner.
+    """
+    mode, piece, end = line_end
+    measurement = lane_state["measurement"]
+    cx, cy = measurement[f"{mode}s"][piece][end]
+    height, width = frame.shape[:2]
+    crop_w, crop_h = min(ZOOM_VIEW_SIZE[0] // zoom, width), min(ZOOM_VIEW_SIZE[1] // zoom, height)
+    x0 = min(max(cx - crop_w // 2, 0), width - crop_w)
+    y0 = min(max(cy - crop_h // 2, 0), height - crop_h)
+    view = cv2.resize(
+        frame[y0 : y0 + crop_h, x0 : x0 + crop_w], (crop_w * zoom, crop_h * zoom), interpolation=cv2.INTER_CUBIC
+    )
+
+    def to_view(point: list[int]) -> tuple[int, int]:  # the middle of that frame pixel
+        return round((point[0] - x0 + 0.5) * zoom), round((point[1] - y0 + 0.5) * zoom)
+
+    for line_mode, color in LINE_COLOR_BY_MODE.items():
+        for line in measurement.get(f"{line_mode}s") or []:
+            if len(line) == 2:
+                cv2.line(view, to_view(line[0]), to_view(line[1]), hex_to_bgr(color), 1, cv2.LINE_AA)
+    # A cross with an open middle, so the spot it points at stays visible.
+    vx, vy = to_view([cx, cy])
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        cv2.line(view, (vx + dx * 8, vy + dy * 8), (vx + dx * 26, vy + dy * 26), (0, 255, 255), 2, cv2.LINE_AA)
+    return view, x0, y0
+
+
+def clicked_point(canvas_data: dict | None) -> tuple[float, float] | None:
+    """Where the canvas was last clicked in point mode (the click is the middle of the dot it leaves)."""
+    for obj in reversed((canvas_data or {}).get("objects", [])):
+        if str(obj.get("type", "")).lower() == "circle":
+            half = float(obj.get("radius") or 0) + float(obj.get("strokeWidth") or 0) / 2
+            x = float(obj.get("left", 0)) + {"left": half, "right": -half}.get(obj.get("originX"), 0.0)
+            y = float(obj.get("top", 0)) + {"top": half, "bottom": -half}.get(obj.get("originY"), 0.0)
+            return x, y
     return None
 
 
@@ -706,6 +784,63 @@ if frame is not None:
                 f"Saved {MODE_LABELS[mode].lower()} for {active_lane}. "
                 "Press 'Save calibration config' to write it to disk.",
             )
+            st.rerun()
+
+    # The drawing above is scaled down, so a line drawn on it can be several frame pixels off, and far from the
+    # camera one pixel is a long stretch of road. Each line end is therefore placed again on a magnified picture.
+    ends = line_ends(active_lane_state)
+    if ends:
+        st.divider()
+        st.subheader("Place the line ends exactly")
+        st.caption(
+            "Speeds are only as accurate as the lines. Choose a line end, then click in the magnified picture "
+            "exactly where the line must touch the road, e.g. where your cone or mark meets the ground. "
+            "The yellow cross shows where that end is now; the picture follows it, so click towards a mark that "
+            "is out of view (or use 2x) to reach it. Do this for every end of both lines."
+        )
+        if st.session_state.get(k(f"zoom_end_{active_lane}")) not in ends:
+            st.session_state.pop(k(f"zoom_end_{active_lane}"), None)  # that line was redrawn with fewer pieces
+        st.session_state.setdefault(k("zoom"), 4)
+        with st.container(horizontal=True, vertical_alignment="bottom", gap="large"):
+            line_end = st.selectbox(
+                "Line end",
+                ends,
+                format_func=lambda e: line_end_label(active_lane_state, e),
+                key=k(f"zoom_end_{active_lane}"),
+                width=360,
+            )
+            zoom = st.radio("Zoom", ZOOM_LEVELS, format_func=lambda z: f"{z}x", horizontal=True, key=k("zoom"))
+
+        view, view_x0, view_y0 = zoomed_view(frame, active_lane_state, line_end, zoom)
+        end_mode, end_piece, end_index = line_end
+        zoom_result = st_canvas(
+            fill_color="#FFFF00",
+            stroke_width=1,
+            stroke_color="#FFFF00",
+            background_image=Image.fromarray(cv2.cvtColor(view, cv2.COLOR_BGR2RGB)),
+            update_streamlit=True,
+            height=view.shape[0],
+            width=view.shape[1],
+            drawing_mode="point",
+            point_display_radius=2,
+            # A new canvas after every placement, so each click is used once.
+            key=f"zoom_{uid}_{active_lane}_{end_mode}_{end_piece}_{end_index}_{zoom}_{cam.setdefault('zoom_version', 0)}",
+        )
+        end_x, end_y = active_lane_state["measurement"][f"{end_mode}s"][end_piece][end_index]
+        st.caption(f"This end is at pixel ({end_x}, {end_y}) of the {width} x {height} picture.")
+
+        click = clicked_point(zoom_result.json_data)
+        if click is not None:
+            move_line_end(
+                active_lane_state,
+                line_end,
+                [
+                    min(max(view_x0 + int(click[0] // zoom), 0), width - 1),
+                    min(max(view_y0 + int(click[1] // zoom), 0), height - 1),
+                ],
+            )
+            cam["zoom_version"] += 1
+            st.session_state.flash = ("toast", "Line end moved. Press 'Save calibration config' to write it to disk.")
             st.rerun()
 
 sync_widgets(uid)
