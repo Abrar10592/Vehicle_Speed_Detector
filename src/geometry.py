@@ -53,3 +53,20 @@ def segments_intersect(p1: Point, q1: Point, p2: Point, q2: Point) -> bool:
 
 def crossed_line(previous: Point, current: Point, line: Line) -> bool:
     return segments_intersect(previous, current, line[0], line[1])
+
+
+def crossing_fraction(previous: Point, current: Point, line: Line) -> float | None:
+    """How far along the step from `previous` to `current` the line was crossed (0 = at previous, 1 = at current).
+
+    None when the step does not cross the line. A vehicle is only seen once per frame, so it is on the line
+    somewhere between two frames; the fraction gives that moment instead of the later frame's time.
+    """
+    if not crossed_line(previous, current, line):
+        return None
+    (ax, ay), (bx, by) = line
+    # Signed distances of the two positions from the line; they have opposite signs when it was crossed.
+    side_previous = (bx - ax) * (previous[1] - ay) - (by - ay) * (previous[0] - ax)
+    side_current = (bx - ax) * (current[1] - ay) - (by - ay) * (current[0] - ax)
+    if side_previous == side_current:  # moving along the line
+        return 0.0
+    return min(1.0, max(0.0, side_previous / (side_previous - side_current)))

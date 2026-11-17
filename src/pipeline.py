@@ -13,9 +13,9 @@ import cv2
 import numpy as np
 
 from .config import AppConfig, LaneConfig, list_camera_ids, load_config
-from .detector import MotionVehicleDetector, YoloVehicleDetector
+from .detector import MotionVehicleDetector, YoloVehicleDetector, detection_areas
 from .evidence import EvidenceRecorder
-from .geometry import crossed_line, road_point
+from .geometry import crossing_fraction, road_point
 from .live import STOP_FILE_NAME, LiveWriter, write_status
 from .models import SpeedEvent
 from .tracker import CentroidTracker
@@ -276,6 +276,10 @@ def run(
 
     frame_h, frame_w = first_frame.shape[:2]
     lane_mask = _build_lane_roi_mask(first_frame.shape, config)
+    if isinstance(detector, YoloVehicleDetector):
+        detector.main_area, detector.far_areas = detection_areas(first_frame.shape, config.lanes)
+        if detector.far_areas:
+            print(f"Camera {config.camera_id}: far line searched at full resolution in {detector.far_areas}")
 
     overlay_writer = None
     if output_overlay_path:
@@ -287,7 +291,7 @@ def run(
     _prepare_event_csv(events_csv_path)
 
     lane_track_state: dict[tuple[int, str], dict[str, float | bool | int]] = {}
-    prev_road_points: dict[int, tuple[int, int]] = {}
+    prev_road_points: dict[int, tuple[tuple[int, int], float]] = {}  # last sighting: (road point, time)
     measured_by_track: dict[int, SpeedEvent] = {}
     # (frame_index, bbox) per track; long enough to cover the evidence pre-event window.
     history_len = max(120, evidence.pre_frames + 1)
@@ -323,10 +327,15 @@ def run(
                 observed_boxes[track.track_id] = bbox
                 history.append((frame_index, bbox))
 
+            # Positions and their times are only taken from frames where the vehicle was really detected.
+            observed = track.last_seen_ts == timestamp_s
+            last_seen = prev_road_points.get(track.track_id)
+            if observed:
+                prev_road_points[track.track_id] = (point, timestamp_s)
+
             lane = _lane_for_point(point, config.lanes)
             if lane is None:
                 debug_state_by_track[track.track_id] = "lane=- in=0 start=0 end=0"
-                prev_road_points[track.track_id] = point
                 continue
 
             key = (track.track_id, lane.lane_id)
@@ -337,30 +346,28 @@ def run(
                     "start_frame": 0,
                     "done": False,
                 }
-
-            if track.track_id not in prev_road_points:
-                prev_road_points[track.track_id] = point
-                continue
-
-            previous = prev_road_points[track.track_id]
-            current = point
             state = lane_track_state[key]
 
-            crossed_any_start = any(
-                crossed_line(previous, current, start_line) for start_line in lane.measurement.start_lines
-            )
-            crossed_any_end = any(
-                crossed_line(previous, current, end_line) for end_line in lane.measurement.end_lines
-            )
+            # A line is crossed somewhere between two sightings of the vehicle. The moment is worked out from
+            # how far along that step the line lies; taking the later sighting's time instead would make every
+            # crossing late by up to one step, a random error of several percent at 15 frames per second.
+            crossings: list[tuple[float, str]] = []
+            if observed and last_seen is not None:
+                previous, previous_ts = last_seen
+                for name, lines in (("start", lane.measurement.start_lines), ("end", lane.measurement.end_lines)):
+                    fractions = [f for line in lines if (f := crossing_fraction(previous, point, line)) is not None]
+                    if fractions:
+                        crossings.append((previous_ts + min(fractions) * (timestamp_s - previous_ts), name))
+            crossings.sort()
 
-            if state["first_line"] is None and (crossed_any_start or crossed_any_end):
-                state["first_line"] = "start" if crossed_any_start else "end"
-                state["start_ts"] = timestamp_s
+            if state["first_line"] is None and crossings:
+                crossed_ts, state["first_line"] = crossings.pop(0)
+                state["start_ts"] = crossed_ts
                 state["start_frame"] = frame_index
 
-            crossed_other_line = crossed_any_end if state["first_line"] == "start" else crossed_any_start
-            if state["first_line"] is not None and not state["done"] and crossed_other_line:
-                elapsed_s = max(0.001, timestamp_s - float(state["start_ts"]))
+            other_line_ts = next((ts for ts, name in crossings if name != state["first_line"]), None)
+            if state["first_line"] is not None and not state["done"] and other_line_ts is not None:
+                elapsed_s = max(0.001, other_line_ts - float(state["start_ts"]))
                 speed_kmph = (lane.measurement.distance_m / elapsed_s) * 3.6
 
                 event = SpeedEvent(
@@ -392,8 +399,6 @@ def run(
             debug_state_by_track[track.track_id] = (
                 f"lane={lane.lane_id} in=1 start={int(state['first_line'] is not None)} end={int(bool(state['done']))}"
             )
-
-            prev_road_points[track.track_id] = point
 
         evidence.push_frame(frame, frame_index, observed_boxes)
         for event, boxes_by_frame in speeding:
