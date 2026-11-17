@@ -20,6 +20,9 @@ RUNTIME_DIR = ROOT / "runtime"
 LIVE_DIR = RUNTIME_DIR / "live"
 PID_FILE = RUNTIME_DIR / "monitor.pid"
 LOG_FILE = RUNTIME_DIR / "monitor.log"
+# Present from Start monitoring until Stop monitoring: server.py restarts the service after a crash, a power
+# cut or an update while it exists.
+WANTED_FILE = RUNTIME_DIR / "monitor.wanted"
 
 # e.g. 19-14-34_lane_2_115.7kmh.mp4, or ..._2.mp4 for a second offender in the same second
 CLIP_NAME = re.compile(r"^(?P<time>\d{2}-\d{2}-\d{2})_(?P<lane>.+)_(?P<speed>\d+(?:\.\d+)?)kmh(?:_\d+)?\.mp4$")
@@ -40,9 +43,10 @@ def monitor_pid() -> int | None:
 
 def start_monitoring(config_path: str = CONFIG_PATH) -> None:
     """Start processing every camera in the config in the background, publishing live views to LIVE_DIR."""
+    LIVE_DIR.mkdir(parents=True, exist_ok=True)
+    WANTED_FILE.touch()
     if monitor_pid() is not None:
         return
-    LIVE_DIR.mkdir(parents=True, exist_ok=True)
     for old in LIVE_DIR.iterdir():  # frames, statuses and the STOP request of the previous run
         old.unlink(missing_ok=True)
     command = [
@@ -66,6 +70,7 @@ def start_monitoring(config_path: str = CONFIG_PATH) -> None:
 def stop_monitoring() -> None:
     """Ask the service to stop; it finishes the evidence clips being recorded first."""
     LIVE_DIR.mkdir(parents=True, exist_ok=True)
+    WANTED_FILE.unlink(missing_ok=True)
     (LIVE_DIR / STOP_FILE_NAME).touch()
 
 
@@ -74,6 +79,7 @@ def stop_requested() -> bool:
 
 
 def force_stop_monitoring() -> None:
+    WANTED_FILE.unlink(missing_ok=True)
     pid = monitor_pid()
     if pid is not None:
         for process in [psutil.Process(pid), *psutil.Process(pid).children(recursive=True)]:

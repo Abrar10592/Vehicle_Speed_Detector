@@ -30,6 +30,7 @@ Vehicle speed detection for CCTV cameras (live streams) and recorded videos, wit
 - [src/video_source.py](src/video_source.py): video file / live stream reading.
 - [src/live.py](src/live.py), [src/monitor.py](src/monitor.py): live view files, monitoring service control, evidence index.
 - [config/calibration.example.json](config/calibration.example.json): sample calibration config.
+- [server.py](server.py), [update.py](update.py), [selftest.py](selftest.py), Start.bat, Update.bat: unattended running and updates (below).
 
 ## Install
 Needs Python 3.14 and Git. In the project folder:
@@ -100,7 +101,46 @@ Where the lines are drawn decides how accurate the speeds are and how many vehic
 - Draw the lane polygon over the whole carriageway, down to the bottom of the frame; vehicles whose wheels are outside it are ignored.
 - Measure `distance_m` along the road. Lane dashes are a convenient ruler: on UK motorways a dash plus its gap is 9 m, so lines placed on the ends of dashes N cycles apart are N x 9 m apart.
 
-The default `config/calibration.json` is a calibration for `videos/sample_two_lane.mp4` built this way. The dashboard loads it on start; saving overwrites it.
+`config/calibration.json` holds this computer's cameras, including their passwords, and is not stored in Git. The dashboard loads it on start and saving overwrites it; on a new computer it is created by the first save. [config/calibration.example.json](config/calibration.example.json) is a sample, a calibration for `videos/sample_two_lane.mp4` built this way.
+
+## Running on a Server
+On a computer that runs unattended, start the app with **Start.bat** instead of `streamlit run`. It runs
+[server.py](server.py), which:
+- starts the app (http://localhost:8501) and starts it again if it ends;
+- starts monitoring again after a crash, a power cut or an update, if it was on (*Start monitoring* pressed and
+  *Stop monitoring* not pressed);
+- restarts the app after an update.
+
+To start it whenever the Windows user logs in, run once:
+
+```powershell
+.venv\Scripts\python.exe server.py --install-autostart
+```
+
+(`--remove-autostart` undoes it.) To come back by itself after a restart of the computer, Windows must also log
+that user in automatically.
+
+## Updates
+A server only installs **released versions**: Git tags named like `v1.2`. Work pushed to `main` without a tag is
+not installed anywhere. To release the current `main`:
+
+```powershell
+git tag v1.2
+git push origin v1.2
+```
+
+On the server, **Setup > Update** shows the installed version; *Check for updates* looks for a newer release and
+*Update now* installs it. An update:
+1. stops monitoring (clips being recorded are saved first) and keeps a copy of `config/calibration.json`;
+2. installs the release, and the Python packages if `requirements.lock.txt` changed;
+3. runs [selftest.py](selftest.py): it measures a generated video of a box moving at a known speed, loads this
+   computer's calibration and runs the vehicle detector;
+4. if anything failed, goes back to the version that was running;
+5. starts monitoring again, and the app is restarted (by Start.bat) to use the new version.
+
+If the app does not open, double-click **Update.bat**: it does the same without the app, and also reinstalls the
+Python packages and tests the installed version when there is no newer release. `python update.py --undo` goes
+back to the version before the last update. Both write to `runtime/update.log`.
 
 ## Live Cameras
 In Calibration, press **Live camera...** next to the video field and enter the camera's name, IP address, user name

@@ -1,0 +1,93 @@
+VEHICLE SPEED DETECTOR - SETTING UP A NEW SERVER LAPTOP
+=======================================================
+
+Do these steps once on each laptop that will run the cameras.
+They are not needed on a development laptop.
+
+
+STEP 1 - INSTALL THE PROGRAM
+----------------------------
+1. Install Git for Windows:      https://git-scm.com/download/win
+2. Install Python 3.14:          https://www.python.org/downloads/
+   (tick "Add python.exe to PATH" during the install)
+3. Open PowerShell in the folder where the program should live (for example D:\)
+   and run these lines one by one:
+
+     git clone https://github.com/Abrar10592/Vehicle_Speed_Detector.git
+     cd Vehicle_Speed_Detector
+     py -3.14 -m venv .venv
+     .venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+
+   If the last line ends with an error about "c10.dll", install the
+   Microsoft Visual C++ Redistributable (x64) and run that line again:
+     https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+4. Network: set the laptop's Ethernet address so it can reach the camera
+   (for example laptop 192.168.1.20, camera 192.168.1.101, mask 255.255.255.0).
+
+
+STEP 2 - START THE APP AND CALIBRATE THE CAMERA
+-----------------------------------------------
+1. Double-click Start.bat in the program folder. The app opens in the browser.
+2. Go to Calibration, click "Live camera...", and type the camera name, IP and password.
+3. Draw the two lines and the lanes, then use "Place the line ends exactly"
+   to put each line end exactly on its road mark.
+4. Click "Save calibration config" in the left sidebar.
+
+
+STEP 3 - START THE PROGRAM WHENEVER WINDOWS STARTS
+--------------------------------------------------
+1. Open the program folder in File Explorer.
+2. Click the address bar at the top, type  powershell  and press Enter.
+3. Paste this line and press Enter:
+
+     .venv\Scripts\python.exe server.py --install-autostart
+
+4. It should reply with a line starting with "Installed:".
+
+To undo it later, run the same with  --remove-autostart  instead.
+
+
+STEP 4 - LET WINDOWS LOG IN BY ITSELF
+-------------------------------------
+Without this, after a power cut Windows waits at the password screen
+and the program does not start.
+
+1. Press Windows key + I  ->  Accounts  ->  Sign-in options.
+   Turn OFF "For improved security, only allow Windows Hello sign-in
+   for Microsoft accounts" (skip this if you do not see it).
+2. Press Windows key + R, type  netplwiz  and press Enter.
+3. Click your user name, untick "Users must enter a user name and
+   password to use this computer", click OK.
+4. Type your password twice and click OK.
+
+Note: anyone who switches this laptop on gets in without a password.
+Keep it in a locked place.
+
+
+STEP 5 - THE LAPTOP MUST NEVER SLEEP
+------------------------------------
+1. Settings -> System -> Power & battery:
+   set sleep "when plugged in" to Never.
+2. If the lid will be closed: Control Panel -> Power Options ->
+   "Choose what closing the lid does" -> When I close the lid (plugged in) -> Do nothing.
+
+
+STEP 6 - TEST IT
+----------------
+1. In the app, start monitoring.
+2. Restart the laptop.
+3. Check that: Windows logs in by itself, the app opens by itself,
+   and monitoring is running again (within about a minute).
+
+
+DAILY USE AND UPDATES
+---------------------
+- Do not close the black "Vehicle Speed Detector" window; minimise it.
+  Closing it stops the part that restarts the app after a crash.
+- To stop everything: press "Stop monitoring" in the app, then close the black window.
+- To update: in the app go to Setup -> Update -> "Update now".
+- If the app does not open: double-click Update.bat in the program folder.
+  It installs the newest released version and tests it without the app.
+- To go back to the version before the last update, open PowerShell in the
+  program folder and run:   .venv\Scripts\python.exe update.py --undo
