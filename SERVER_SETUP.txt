@@ -69,13 +69,21 @@ STEP 5 - THE LAPTOP MUST NEVER SLEEP
 ------------------------------------
 1. Settings -> System -> Power & battery:
    set sleep "when plugged in" to Never.
-2. If the lid will be closed: Control Panel -> Power Options ->
-   "Choose what closing the lid does" -> When I close the lid (plugged in) -> Do nothing.
+2. Control Panel -> Power Options -> "Choose what the power buttons do":
+   set "When I press the power button", "When I press the sleep button" and
+   "When I close the lid" to Do nothing, for both "On battery" and "Plugged in",
+   then click "Save changes". (Holding the power button for 5 seconds still
+   switches the laptop off.)
+3. Keep the charger plugged in. (On 22 Nov the test laptop was put to sleep and
+   unplugged, and nothing was measured for 42 hours.)
+
+The program itself also stops Windows from sleeping by itself while cameras
+are monitored, but it cannot stop a person from choosing Sleep.
 
 
 STEP 6 - TEST IT
 ----------------
-1. In the app, start monitoring.
+1. In the app, go to Live monitor and press "Start all".
 2. Restart the laptop.
 3. Check that: Windows logs in by itself, the app opens by itself,
    and monitoring is running again (within about a minute).
@@ -85,7 +93,7 @@ DAILY USE AND UPDATES
 ---------------------
 - Do not close the black "Vehicle Speed Detector" window; minimise it.
   Closing it stops the part that restarts the app after a crash.
-- To stop everything: press "Stop monitoring" in the app, then close the black window.
+- To stop everything: press "Stop all" in Live monitor, then close the black window.
 - To update: in the app go to Setup -> Update -> "Update now".
 - If the app does not open: double-click Update.bat in the program folder.
   It installs the newest released version and tests it without the app.

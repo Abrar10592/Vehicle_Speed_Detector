@@ -11,6 +11,7 @@ import streamlit as st
 from streamlit_drawable_canvas import st_canvas  # type: ignore[import-not-found]
 from PIL import Image
 
+from src.monitor import CONFIG_PATH, ROOT, restart_in_background, running_cameras
 from src.video_source import STREAM_PATHS, camera_login, camera_stream_address, grab_stream_frame, is_live_source
 
 
@@ -41,6 +42,13 @@ ZOOM_VIEW_SIZE = (840, 480)
 LINE_JOIN_PX = 12  # ends of two pieces of one line this close together are one corner and move together
 
 DETECTOR_OPTIONS = ["motion", "yolo"]
+DEVICE_LABELS = {
+    "auto": "Automatic (fastest available)",
+    "intel:gpu": "Intel graphics (OpenVINO)",
+    "intel:cpu": "Processor (OpenVINO)",
+    "cuda": "NVIDIA graphics card",
+    "cpu": "Processor (PyTorch, slowest)",
+}
 DEFAULT_CAMERA = {
     "camera_id": "",
     "video_path": "",
@@ -447,6 +455,7 @@ def add_camera(camera: dict) -> str:
         "conf": float(detector["confidence"]),
         "iou": float(detector["iou"]),
         "classes": ",".join(str(c) for c in detector["classes"]),
+        "device": detector.get("device", "auto") if detector.get("device", "auto") in DEVICE_LABELS else "auto",
         "lane_count": max(1, len(settings["lanes"] or [])),
     }
     st.session_state[skey(uid, "active_lane")] = "lane_1"  # plain state, not a widget
@@ -499,6 +508,7 @@ def camera_config(uid: str) -> dict:
             "confidence": float(s("conf")),
             "iou": float(s("iou")),
             "classes": [int(v.strip()) for v in str(s("classes")).split(",") if v.strip()],
+            "device": s("device"),
         },
         "lanes": [
             lane_config(uid, key) for key in lane_keys if key in cam["lanes"] and lane_has_geometry(cam["lanes"][key])
@@ -566,6 +576,15 @@ def live_camera_dialog(uid: str) -> None:
     st.rerun()
 
 
+def comparable(camera: dict | None) -> str:
+    """A camera's settings in a form where an unchanged camera compares equal (e.g. defaults written out)."""
+    if camera is None:
+        return ""
+    camera = json.loads(json.dumps(camera))
+    camera.setdefault("detector", {}).setdefault("device", "auto")
+    return json.dumps(camera, sort_keys=True)
+
+
 def save_all_cameras() -> None:
     output_path = st.session_state.config_output
     sync_widgets(st.session_state.selected_cam)
@@ -580,10 +599,23 @@ def save_all_cameras() -> None:
         return
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    before = {c.get("camera_id"): c for c in load_saved_config(output_path).get("cameras", [])}
     out_path.write_text(to_pretty_json({"cameras": cameras}) + "\n", encoding="utf-8")
     missing = [c["camera_id"] for c in cameras if not c["lanes"]]
     note = f" (no lanes yet: {', '.join(missing)})" if missing else ""
-    st.session_state.flash = ("success", f"Saved {len(cameras)} camera(s) to {out_path}{note}")
+    message = f"Saved {len(cameras)} camera(s) to {out_path}{note}."
+    # A running camera reads its settings when it starts, so the cameras whose settings changed are restarted.
+    if out_path.resolve() == (ROOT / CONFIG_PATH).resolve():
+        after = {c["camera_id"]: c for c in cameras}
+        changed = [
+            camera
+            for camera in running_cameras()
+            if comparable(before.get(camera)) != comparable(after.get(camera))
+        ]
+        if changed:
+            restart_in_background(changed)
+            message += f" Restarting {', '.join(changed)} so the new settings are used (takes a few seconds)."
+    st.session_state.flash = ("success", message)
 
 
 st.title("Calibration")
@@ -652,6 +684,13 @@ with left:
     st.slider("YOLO confidence", min_value=0.05, max_value=0.95, step=0.05, key=k("conf"))
     st.slider("YOLO IoU", min_value=0.10, max_value=0.95, step=0.05, key=k("iou"))
     st.text_input("YOLO classes (comma-separated COCO IDs)", key=k("classes"))
+    st.selectbox(
+        "Run detector on",
+        options=list(DEVICE_LABELS),
+        format_func=DEVICE_LABELS.get,
+        key=k("device"),
+        help="Automatic uses an NVIDIA card if there is one, otherwise Intel graphics, otherwise the processor.",
+    )
 
     st.subheader("Lanes")
     lane_count = int(st.number_input("Number of lanes", min_value=1, step=1, key=k("lane_count")))

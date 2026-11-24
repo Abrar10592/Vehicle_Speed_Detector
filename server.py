@@ -6,8 +6,8 @@
 
 While it runs:
 - the app (http://localhost:8501) is started, and started again if it ends;
-- monitoring that was on (Start monitoring pressed, Stop monitoring not pressed) is started again after a
-  crash, a power cut or an update;
+- each camera that was being monitored (Start pressed, Stop not pressed) is started again after a crash, a
+  power cut or an update;
 - the app is restarted after an update, so the new version is the one in use.
 
 For it to survive a restart of the computer, Windows must log this user in automatically.
@@ -32,8 +32,7 @@ SERVER_FILE = RUNTIME / "server.json"  # this process and the app it started
 APP_LOG = RUNTIME / "app.log"
 RESTART_APP_FILE = RUNTIME / "restart_app"
 UPDATE_STATUS_FILE = RUNTIME / "update_status.json"
-MONITOR_PID_FILE = RUNTIME / "monitor.pid"
-MONITOR_WANTED_FILE = RUNTIME / "monitor.wanted"
+MONITOR_DIR = RUNTIME / "monitor"  # <camera>.pid and, while the camera should be monitored, <camera>.wanted
 LIVE_DIR = RUNTIME / "live"
 AUTOSTART_NAME = "Vehicle Speed Detector.cmd"
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -81,25 +80,29 @@ def start_app(port: int) -> subprocess.Popen:
         return subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
 
 
-def monitoring_should_restart() -> bool:
-    """Monitoring was on and its process is gone without having finished or been stopped."""
-    if not MONITOR_WANTED_FILE.exists() or _read_json(UPDATE_STATUS_FILE).get("state") == "running":
-        return False
-    try:
-        pid = int(MONITOR_PID_FILE.read_text())
-    except (OSError, ValueError):
-        pid = None
-    if _running(pid, "run_video.py") or (LIVE_DIR / "STOP").exists():
-        return False
-    # A run over recorded videos ends by itself ("finished"); only an interrupted one is started again.
-    states = [_read_json(path).get("state") for path in LIVE_DIR.glob("*.json")] if LIVE_DIR.is_dir() else []
-    return not states or any(state not in ("finished", "stopped") for state in states)
+def cameras_to_restart() -> list[str]:
+    """Cameras that should be monitored whose process is gone without having finished or been stopped."""
+    if _read_json(UPDATE_STATUS_FILE).get("state") == "running" or not MONITOR_DIR.is_dir():
+        return []
+    cameras = []
+    for wanted in MONITOR_DIR.glob("*.wanted"):
+        camera = wanted.stem
+        try:
+            pid = int((MONITOR_DIR / f"{camera}.pid").read_text())
+        except (OSError, ValueError):
+            pid = None
+        if _running(pid, "run_video.py") or (LIVE_DIR / f"STOP_{camera}").exists():
+            continue
+        # A run over a recorded video ends by itself ("finished"); only an interrupted one is started again.
+        if _read_json(LIVE_DIR / f"{camera}.json").get("state") not in ("finished", "stopped"):
+            cameras.append(camera)
+    return sorted(cameras)
 
 
-def start_monitoring() -> None:
+def start_monitoring(camera: str) -> None:
     # In a new process, so that the version installed by the latest update is the one that runs.
     subprocess.run(
-        [sys.executable, "-c", "from src.monitor import start_monitoring; start_monitoring()"],
+        [sys.executable, "-c", "import sys; from src.monitor import start_monitoring; start_monitoring(sys.argv[1])", camera],
         cwd=ROOT,
         capture_output=True,
         creationflags=NO_WINDOW,
@@ -137,10 +140,11 @@ def serve(port: int, open_browser: bool) -> int:
                 if open_browser:
                     open_browser = False
                     webbrowser.open(f"http://localhost:{port}")
-            if now - monitor_started > RETRY_AFTER_S and monitoring_should_restart():
-                print(f"{time.strftime('%H:%M:%S')}  starting monitoring again")
-                monitor_started = now
-                start_monitoring()
+            if now - monitor_started > RETRY_AFTER_S:
+                for camera in cameras_to_restart():
+                    print(f"{time.strftime('%H:%M:%S')}  starting monitoring of {camera} again")
+                    monitor_started = now
+                    start_monitoring(camera)
             time.sleep(CHECK_EVERY_S)
     except KeyboardInterrupt:
         return 0

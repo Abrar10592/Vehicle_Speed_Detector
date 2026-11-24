@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import time
+from pathlib import Path
 from typing import List
 
 import cv2
@@ -108,6 +111,68 @@ def _overlap_of_smaller(a: Area, b: Area) -> float:
     return w * h / smaller if smaller > 0 else 0.0
 
 
+# Where YOLO runs. "auto": an NVIDIA graphics card if there is one, otherwise Intel graphics through OpenVINO,
+# otherwise the processor through OpenVINO, otherwise plain PyTorch on the processor.
+DEVICES = ("auto", "cuda", "intel:gpu", "intel:cpu", "cpu")
+
+
+def openvino_model_dir(model_path: str | Path) -> Path:
+    """Where the OpenVINO copy of a YOLO .pt model is kept: yolo11n.pt -> yolo11n_openvino_model/."""
+    path = Path(model_path)
+    return path.with_name(f"{path.stem}_openvino_model")
+
+
+def _openvino_devices() -> list[str]:
+    try:
+        import openvino as ov
+    except ImportError:
+        return []
+    return list(ov.Core().available_devices)
+
+
+def prepare_openvino_model(model_path: str | Path) -> Path:
+    """Convert the .pt model to OpenVINO once (a few seconds); later runs use the converted copy."""
+    target = openvino_model_dir(model_path)
+    lock = target.with_name(target.name + ".lock")
+    deadline = time.time() + 300
+    while not (target / "metadata.yaml").exists():
+        try:
+            handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # one camera converts, the others wait
+        except FileExistsError:
+            if time.time() > deadline or time.time() - lock.stat().st_mtime > 300:
+                lock.unlink(missing_ok=True)  # left over from a conversion that was interrupted
+            time.sleep(1)
+            continue
+        try:
+            from ultralytics import YOLO
+
+            # dynamic: any picture size, as the lane areas and the far search are not square
+            YOLO(str(model_path)).export(format="openvino", dynamic=True, half=False, verbose=False)
+        finally:
+            os.close(handle)
+            lock.unlink(missing_ok=True)
+    return target
+
+
+def choose_device(model_path: str, device: str = "auto") -> tuple[str, str | None]:
+    """(model to load, device to run it on) for the requested device; see DEVICES."""
+    if device not in DEVICES:
+        raise ValueError(f"Unknown detector device '{device}'. Use one of: {', '.join(DEVICES)}.")
+    is_pt = Path(model_path).suffix == ".pt"
+    if device == "auto":
+        import torch
+
+        if torch.cuda.is_available() or not is_pt:
+            return model_path, None  # PyTorch picks the NVIDIA card by itself
+        devices = _openvino_devices()
+        if not devices:
+            return model_path, "cpu"
+        device = "intel:gpu" if any(d.startswith("GPU") for d in devices) else "intel:cpu"
+    if device.startswith("intel:"):
+        return str(prepare_openvino_model(model_path)) if is_pt else model_path, device
+    return model_path, device
+
+
 class YoloVehicleDetector:
     def __init__(
         self,
@@ -115,7 +180,10 @@ class YoloVehicleDetector:
         confidence: float = 0.35,
         iou: float = 0.45,
         classes: list[int] | None = None,
+        device: str = "auto",
     ) -> None:
+        # Without this, Ultralytics sends anonymous usage data online and can wait on a slow connection.
+        os.environ.setdefault("YOLO_OFFLINE", "1")
         try:
             from ultralytics import YOLO
         except ImportError as ex:  # pragma: no cover
@@ -123,13 +191,36 @@ class YoloVehicleDetector:
                 "ultralytics is not installed. Run: pip install ultralytics"
             ) from ex
 
-        self.model = YOLO(model_path)
+        self.pt_model_path = model_path
+        try:
+            loaded_path, self.device = choose_device(model_path, device)
+            self.model = YOLO(loaded_path, task="detect")
+            if self.device and self.device.startswith("intel:"):
+                self.model.predict(np.zeros((64, 64, 3), np.uint8), device=self.device, verbose=False)  # fails early
+        except Exception as exc:  # e.g. a graphics driver OpenVINO cannot use: run on the processor instead
+            if device != "auto":
+                raise
+            print(f"OpenVINO could not be used ({exc}); running YOLO with PyTorch on the processor.")
+            self.model, self.device = YOLO(model_path), "cpu"
         self.confidence = confidence
         self.iou = iou
         self.classes = classes if classes is not None else [2, 3, 5, 7]
         # Set from the lanes with detection_areas(); without them the whole frame is searched.
         self.main_area: Area | None = None
         self.far_areas: list[Area] = []
+
+    @property
+    def engine(self) -> str:
+        """Where YOLO runs, in words, e.g. for the log."""
+        if self.device == "intel:gpu":
+            return "OpenVINO on Intel graphics"
+        if self.device == "intel:cpu":
+            return "OpenVINO on the processor"
+        if self.device == "cpu":
+            return "PyTorch on the processor"
+        import torch
+
+        return "PyTorch on the NVIDIA graphics card" if torch.cuda.is_available() else "PyTorch on the processor"
 
     def _boxes_in(self, frame: np.ndarray, area: Area | None, image_size: int) -> list[tuple[Area, float]]:
         """Vehicle boxes (in frame coordinates) found in one area of the frame."""
@@ -146,6 +237,7 @@ class YoloVehicleDetector:
             agnostic_nms=True,
             verbose=False,
             imgsz=image_size,
+            device=self.device,
         )
         if not results or results[0].boxes is None:
             return []

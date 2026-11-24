@@ -46,6 +46,7 @@ class AppConfig:
     yolo_confidence: float
     yolo_iou: float
     yolo_classes: list[int]
+    yolo_device: str
     lanes: List[LaneConfig]
     video_path: str | None = None
 
@@ -161,6 +162,7 @@ def load_config(path: str | Path, camera_id: str | None = None) -> AppConfig:
         yolo_confidence=float(raw.get("detector", {}).get("confidence", 0.35)),
         yolo_iou=float(raw.get("detector", {}).get("iou", 0.45)),
         yolo_classes=[int(c) for c in raw.get("detector", {}).get("classes", [2, 3, 5, 7])],
+        yolo_device=str(raw.get("detector", {}).get("device", "auto")),
         lanes=lanes,
         video_path=raw.get("video_path") or None,
     )

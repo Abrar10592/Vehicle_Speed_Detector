@@ -7,88 +7,152 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import psutil
 
-from .config import read_cameras
-from .live import STOP_FILE_NAME
+from .config import list_camera_ids, read_cameras
+from .live import camera_stop_file_name
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = "config/calibration.json"
 RUNTIME_DIR = ROOT / "runtime"
 LIVE_DIR = RUNTIME_DIR / "live"
-PID_FILE = RUNTIME_DIR / "monitor.pid"
-LOG_FILE = RUNTIME_DIR / "monitor.log"
-# Present from Start monitoring until Stop monitoring: server.py restarts the service after a crash, a power
-# cut or an update while it exists.
-WANTED_FILE = RUNTIME_DIR / "monitor.wanted"
+# Each camera is processed by its own background process, so cameras are started and stopped one by one and a
+# camera that fails does not stop the others. Per camera: <camera>.pid, <camera>.log and, from Start until Stop,
+# <camera>.wanted (server.py starts a wanted camera again after a crash, a power cut or an update).
+MONITOR_DIR = RUNTIME_DIR / "monitor"
 
 # e.g. 19-14-34_lane_2_115.7kmh.mp4, or ..._2.mp4 for a second offender in the same second
 CLIP_NAME = re.compile(r"^(?P<time>\d{2}-\d{2}-\d{2})_(?P<lane>.+)_(?P<speed>\d+(?:\.\d+)?)kmh(?:_\d+)?\.mp4$")
 DATE_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def monitor_pid() -> int | None:
-    """PID of the running processing service, or None when it is not running."""
+def pid_file(camera_id: str) -> Path:
+    return MONITOR_DIR / f"{camera_id}.pid"
+
+
+def wanted_file(camera_id: str) -> Path:
+    return MONITOR_DIR / f"{camera_id}.wanted"
+
+
+def log_file(camera_id: str) -> Path:
+    return MONITOR_DIR / f"{camera_id}.log"
+
+
+def stop_file(camera_id: str) -> Path:
+    return LIVE_DIR / camera_stop_file_name(camera_id)
+
+
+def monitor_pid(camera_id: str) -> int | None:
+    """PID of the process monitoring this camera, or None when the camera is not being monitored."""
     try:
-        pid = int(PID_FILE.read_text())
+        pid = int(pid_file(camera_id).read_text())
         process = psutil.Process(pid)
-        if process.status() != psutil.STATUS_ZOMBIE and "run_video.py" in " ".join(process.cmdline()):
+        command = process.cmdline()
+        if process.status() != psutil.STATUS_ZOMBIE and "run_video.py" in " ".join(command) and camera_id in command:
             return pid
     except (OSError, ValueError, psutil.Error):
         pass
     return None
 
 
-def start_monitoring(config_path: str = CONFIG_PATH) -> None:
-    """Start processing every camera in the config in the background, publishing live views to LIVE_DIR."""
+def running_cameras() -> list[str]:
+    if not MONITOR_DIR.is_dir():
+        return []
+    return sorted(path.stem for path in MONITOR_DIR.glob("*.pid") if monitor_pid(path.stem) is not None)
+
+
+def _cameras(camera_id: str | None, config_path: str) -> list[str]:
+    return [camera_id] if camera_id else list_camera_ids(config_path)
+
+
+def start_monitoring(camera_id: str | None = None, config_path: str = CONFIG_PATH) -> None:
+    """Start monitoring one camera (or every camera in the config), publishing its live view to LIVE_DIR."""
     LIVE_DIR.mkdir(parents=True, exist_ok=True)
-    WANTED_FILE.touch()
-    if monitor_pid() is not None:
+    MONITOR_DIR.mkdir(parents=True, exist_ok=True)
+    for camera in _cameras(camera_id, config_path):
+        wanted_file(camera).touch()
+        if monitor_pid(camera) is not None:
+            continue
+        # The picture, status and stop request of this camera's previous run
+        for old in (f"{camera}.jpg", f"{camera}.json", camera_stop_file_name(camera)):
+            (LIVE_DIR / old).unlink(missing_ok=True)
+        command = [
+            sys.executable,
+            "-u",
+            str(ROOT / "run_video.py"),
+            "--config",
+            config_path,
+            "--camera",
+            camera,
+            "--live-dir",
+            str(LIVE_DIR),
+            "--realtime",
+        ]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        with log_file(camera).open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+        pid_file(camera).write_text(str(process.pid))
+
+
+def stop_monitoring(camera_id: str | None = None, config_path: str = CONFIG_PATH) -> None:
+    """Ask one camera (or all) to stop; evidence clips being recorded are finished first."""
+    LIVE_DIR.mkdir(parents=True, exist_ok=True)
+    cameras = [camera_id] if camera_id else sorted({*running_cameras(), *_wanted_cameras()})
+    for camera in cameras:
+        wanted_file(camera).unlink(missing_ok=True)
+        if monitor_pid(camera) is not None:
+            stop_file(camera).touch()
+
+
+def restart_monitoring(camera_id: str, config_path: str = CONFIG_PATH, wait_s: float = 90.0) -> None:
+    """Stop a monitored camera and start it again, e.g. so it uses calibration that was just saved. This waits
+    for the evidence clips being recorded to be finished, so it is best run in a background thread."""
+    if monitor_pid(camera_id) is None:
         return
-    for old in LIVE_DIR.iterdir():  # frames, statuses and the STOP request of the previous run
-        old.unlink(missing_ok=True)
-    command = [
-        sys.executable,
-        "-u",
-        str(ROOT / "run_video.py"),
-        "--config",
-        config_path,
-        "--camera",
-        "all",
-        "--live-dir",
-        str(LIVE_DIR),
-        "--realtime",
-    ]
-    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    with LOG_FILE.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
-    PID_FILE.write_text(str(process.pid))
+    stop_monitoring(camera_id)
+    deadline = time.time() + wait_s
+    while monitor_pid(camera_id) is not None and time.time() < deadline:
+        time.sleep(0.5)
+    if monitor_pid(camera_id) is not None:
+        force_stop_monitoring(camera_id)
+        time.sleep(1)
+    if camera_id in list_camera_ids(config_path):  # not when the camera was removed from the calibration
+        start_monitoring(camera_id, config_path)
 
 
-def stop_monitoring() -> None:
-    """Ask the service to stop; it finishes the evidence clips being recorded first."""
-    LIVE_DIR.mkdir(parents=True, exist_ok=True)
-    WANTED_FILE.unlink(missing_ok=True)
-    (LIVE_DIR / STOP_FILE_NAME).touch()
+def restart_in_background(camera_ids: list[str], config_path: str = CONFIG_PATH) -> None:
+    for camera_id in camera_ids:
+        threading.Thread(target=restart_monitoring, args=(camera_id, config_path), daemon=True).start()
 
 
-def stop_requested() -> bool:
-    return (LIVE_DIR / STOP_FILE_NAME).exists()
+def _wanted_cameras() -> list[str]:
+    return [path.stem for path in MONITOR_DIR.glob("*.wanted")] if MONITOR_DIR.is_dir() else []
 
 
-def force_stop_monitoring() -> None:
-    WANTED_FILE.unlink(missing_ok=True)
-    pid = monitor_pid()
-    if pid is not None:
-        for process in [psutil.Process(pid), *psutil.Process(pid).children(recursive=True)]:
-            process.kill()
+def stop_requested(camera_id: str) -> bool:
+    return stop_file(camera_id).exists()
 
 
-def log_tail(lines: int = 30) -> str:
+def force_stop_monitoring(camera_id: str | None = None) -> None:
+    cameras = [camera_id] if camera_id else running_cameras()
+    for camera in cameras:
+        wanted_file(camera).unlink(missing_ok=True)
+        pid = monitor_pid(camera)
+        if pid is not None:
+            try:
+                for process in [psutil.Process(pid), *psutil.Process(pid).children(recursive=True)]:
+                    process.kill()
+            except psutil.Error:
+                pass
+
+
+def log_tail(camera_id: str, lines: int = 30) -> str:
     try:
-        return "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+        return "\n".join(log_file(camera_id).read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
     except OSError:
         return ""
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import threading
+import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import partial
@@ -16,8 +17,9 @@ from .config import AppConfig, LaneConfig, list_camera_ids, load_config
 from .detector import MotionVehicleDetector, YoloVehicleDetector, detection_areas
 from .evidence import EvidenceRecorder
 from .geometry import crossing_fraction, road_point
-from .live import STOP_FILE_NAME, LiveWriter, write_status
+from .live import STOP_FILE_NAME, LiveWriter, camera_stop_file_name, write_status
 from .models import SpeedEvent
+from .power import keep_full_speed
 from .tracker import CentroidTracker
 from .video_source import open_source
 
@@ -215,9 +217,11 @@ def run(
 ) -> None:
     """Process one camera's video file or live stream.
 
-    live_dir: publish overlay frames and status there for the operator dashboard; a STOP file there ends the run.
+    live_dir: publish overlay frames and status there for the operator dashboard; a STOP or STOP_<camera> file
+        there ends the run.
     realtime: process a video file no faster than it was recorded (a stand-in for a live camera).
     """
+    keep_full_speed()
     config = load_config(config_path, camera_id)
     if not config.lanes:
         raise RuntimeError(f"Camera '{config.camera_id}' has no calibrated lanes in {config_path}.")
@@ -226,13 +230,13 @@ def run(
         raise RuntimeError(f"No video given: pass --video or set a video for camera '{config.camera_id}' in the dashboard.")
     print(f"Camera {config.camera_id}: {video_path}")
     live = LiveWriter(live_dir, config.camera_id, video_path) if live_dir else None
-    stop_file = Path(live_dir) / STOP_FILE_NAME if live_dir else None
+    stop_files = [Path(live_dir) / name for name in (STOP_FILE_NAME, camera_stop_file_name(config.camera_id))] if live_dir else []
     source = open_source(video_path, config.fps_override, realtime)
     fps = source.fps
     print(f"Camera {config.camera_id}: frame rate {fps:g} fps")
 
     def stop_requested() -> bool:
-        return bool(stop_event and stop_event.is_set()) or bool(stop_file and stop_file.exists())
+        return bool(stop_event and stop_event.is_set()) or any(path.exists() for path in stop_files)
 
     def next_frame() -> tuple[np.ndarray, float] | None:
         # A live stream that drops out is waited for until it is back or the run is stopped.
@@ -250,9 +254,10 @@ def run(
             confidence=config.yolo_confidence,
             iou=config.yolo_iou,
             classes=config.yolo_classes,
+            device=config.yolo_device,
         )
         print(
-            f"Camera {config.camera_id}: using YOLO detector, model={config.yolo_model_path}, conf={config.yolo_confidence}, iou={config.yolo_iou}"
+            f"Camera {config.camera_id}: using YOLO detector, model={config.yolo_model_path}, conf={config.yolo_confidence}, iou={config.yolo_iou}, running on: {detector.engine}"
         )
     else:
         detector = MotionVehicleDetector(min_contour_area=config.min_contour_area)
@@ -297,6 +302,10 @@ def run(
     history_len = max(120, evidence.pre_frames + 1)
     track_history: dict[int, deque[tuple[int, BBox]]] = {}
     recent_events: deque[SpeedEvent] = deque(maxlen=8)
+    # Every vehicle seen on a lane, measured or not, goes to vehicle_log.csv once it is gone, so a vehicle that
+    # got no speed can be looked into (seen too late, lost before the second line, split into two, ...).
+    vehicle_log_path = Path(config.evidence_root) / "vehicle_log.csv"
+    vehicles: dict[int, dict] = {}
 
     frame_idx = 0
 
@@ -334,6 +343,14 @@ def run(
                 prev_road_points[track.track_id] = (point, timestamp_s)
 
             lane = _lane_for_point(point, config.lanes)
+            if observed:
+                seen = vehicles.setdefault(
+                    track.track_id,
+                    {"clock": time.time(), "first_s": timestamp_s, "first": point, "sightings": 0, "in_lane": 0, "lines": []},
+                )
+                seen.update(last_s=timestamp_s, last=point, sightings=seen["sightings"] + 1)
+                if lane is not None:
+                    seen["in_lane"] += 1
             if lane is None:
                 debug_state_by_track[track.track_id] = "lane=- in=0 start=0 end=0"
                 continue
@@ -359,6 +376,8 @@ def run(
                     if fractions:
                         crossings.append((previous_ts + min(fractions) * (timestamp_s - previous_ts), name))
             crossings.sort()
+            if crossings and track.track_id in vehicles:
+                vehicles[track.track_id]["lines"].extend(name for _, name in crossings)
 
             if state["first_line"] is None and crossings:
                 crossed_ts, state["first_line"] = crossings.pop(0)
@@ -400,7 +419,7 @@ def run(
                 f"lane={lane.lane_id} in=1 start={int(state['first_line'] is not None)} end={int(bool(state['done']))}"
             )
 
-        evidence.push_frame(frame, frame_index, observed_boxes)
+        evidence.push_frame(frame, frame_index, timestamp_s, observed_boxes)
         for event, boxes_by_frame in speeding:
             evidence.trigger(event, boxes_by_frame)
 
@@ -425,6 +444,8 @@ def run(
                 live.frame(overlay, frame_index + 1, stats["speeders"])
 
         # The tracker never reuses an ID, so state for tracks it has dropped can be released.
+        for track_id in [t for t in vehicles if t not in track_boxes]:
+            _log_vehicle(vehicle_log_path, config.camera_id, track_id, vehicles.pop(track_id), measured_by_track.get(track_id))
         for track_id in [t for t in track_history if t not in track_boxes]:
             del track_history[track_id]
             prev_road_points.pop(track_id, None)
@@ -444,6 +465,8 @@ def run(
 
     for completed_event in evidence.finalize():
         _append_event_csv(events_csv_path, completed_event)
+    for track_id, seen in vehicles.items():  # still in view when the run ended
+        _log_vehicle(vehicle_log_path, config.camera_id, track_id, seen, measured_by_track.get(track_id))
 
     source.release()
     if overlay_writer is not None:
@@ -451,6 +474,44 @@ def run(
     if live is not None:
         live.status("stopped" if stop_requested() else "finished", frames=frame_idx, speeders=stats["speeders"])
     print(f"Camera {config.camera_id}: finished after {frame_idx} frames.")
+
+
+VEHICLE_LOG_FIELDS = [
+    "camera_id", "track_id", "first_seen", "seconds_seen", "sightings", "sightings_on_lane",
+    "first_road_point", "last_road_point", "lines_crossed", "result", "speed_kmph",
+]  # fmt: skip
+
+
+def _log_vehicle(path: Path, camera_id: str, track_id: int, seen: dict, event: SpeedEvent | None) -> None:
+    if not seen["in_lane"]:
+        return  # never on a lane: not traffic this camera measures
+    lines = list(dict.fromkeys(seen["lines"]))  # in the order crossed, once each
+    if event is not None:
+        result = "measured"
+    elif len(lines) == 1:
+        result = f"crossed only the {lines[0]} line"
+    else:
+        result = "crossed no line"
+    row = {
+        "camera_id": camera_id,
+        "track_id": track_id,
+        "first_seen": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(seen["clock"])),
+        "seconds_seen": round(seen["last_s"] - seen["first_s"], 2),
+        "sightings": seen["sightings"],
+        "sightings_on_lane": seen["in_lane"],
+        "first_road_point": f"{seen['first'][0]} {seen['first'][1]}",
+        "last_road_point": f"{seen['last'][0]} {seen['last'][1]}",
+        "lines_crossed": " ".join(lines),
+        "result": result,
+        "speed_kmph": round(event.speed_kmph, 1) if event is not None else "",
+    }
+    with _CSV_LOCK:
+        new = not path.exists()
+        with path.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=VEHICLE_LOG_FIELDS)
+            if new:
+                writer.writeheader()
+            writer.writerow(row)
 
 
 def _report_failure(live_dir: str, camera_id: str, future: Future) -> None:

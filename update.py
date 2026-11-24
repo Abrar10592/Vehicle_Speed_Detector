@@ -33,7 +33,7 @@ BACKUP_DIR = RUNTIME / "backup"
 CONFIG = ROOT / "config" / "calibration.json"
 LOCK_FILE = ROOT / "requirements.lock.txt"
 LIVE_DIR = RUNTIME / "live"
-MONITOR_PID_FILE = RUNTIME / "monitor.pid"
+MONITOR_DIR = RUNTIME / "monitor"  # <camera>.pid of each camera being monitored
 RELEASE_TAGS = "v*"
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -129,42 +129,50 @@ def _process_alive(pid: int) -> bool:
     return str(pid) in out
 
 
-def _monitor_pid() -> int | None:
-    try:
-        pid = int(MONITOR_PID_FILE.read_text())
-    except (OSError, ValueError):
-        return None
-    return pid if _process_alive(pid) else None
+def _monitored_cameras() -> dict[str, int]:
+    """Camera -> PID of each camera being monitored now."""
+    cameras = {}
+    for path in MONITOR_DIR.glob("*.pid") if MONITOR_DIR.is_dir() else []:
+        try:
+            pid = int(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if _process_alive(pid):
+            cameras[path.stem] = pid
+    return cameras
 
 
-def stop_monitoring(wait_s: float = 90.0) -> bool:
-    """Stop the monitoring service for the update. Returns whether it was running (it is started again after)."""
-    pid = _monitor_pid()
-    if pid is None:
-        return False
-    log("Stopping monitoring (clips being recorded are saved first)...")
+def stop_monitoring(wait_s: float = 90.0) -> list[str]:
+    """Stop monitoring for the update. Returns the cameras that were being monitored (started again after)."""
+    cameras = _monitored_cameras()
+    if not cameras:
+        return []
+    log(f"Stopping monitoring of {', '.join(cameras)} (clips being recorded are saved first)...")
     LIVE_DIR.mkdir(parents=True, exist_ok=True)
-    (LIVE_DIR / "STOP").touch()
+    for camera in cameras:
+        (LIVE_DIR / f"STOP_{camera}").touch()
     deadline = time.time() + wait_s
-    while time.time() < deadline and _process_alive(pid):
+    while time.time() < deadline and any(_process_alive(pid) for pid in cameras.values()):
         time.sleep(1)
-    if _process_alive(pid):
-        log("Monitoring did not stop by itself; ending it.")
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
-    return True
+    for camera, pid in cameras.items():
+        if _process_alive(pid):
+            log(f"Monitoring of {camera} did not stop by itself; ending it.")
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+    return sorted(cameras)
 
 
-def start_monitoring() -> None:
-    log("Starting monitoring again...")
-    result = subprocess.run(
-        [sys.executable, "-c", "from src.monitor import start_monitoring; start_monitoring()"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        creationflags=NO_WINDOW,
-    )
-    if result.returncode != 0:
-        log(f"Monitoring could not be started: {result.stderr.strip()[-400:]}")
+def start_monitoring(cameras: list[str]) -> None:
+    for camera in cameras:
+        log(f"Starting monitoring of {camera} again...")
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys; from src.monitor import start_monitoring; start_monitoring(sys.argv[1])", camera],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            creationflags=NO_WINDOW,
+        )
+        if result.returncode != 0:
+            log(f"Monitoring of {camera} could not be started: {result.stderr.strip()[-400:]}")
 
 
 def backup_calibration() -> Path | None:
@@ -269,8 +277,7 @@ def apply(repair: bool = False) -> int:
                 message = f"The update failed ({exc}) and going back failed too ({undo_exc}). Run Update.bat."
         restore_calibration(backup)
     log(message)
-    if was_monitoring:
-        start_monitoring()
+    start_monitoring(was_monitoring)
     if state == "success" and info["available"]:
         RESTART_APP_FILE.touch()  # the app is still running the old version until it is restarted
         write_status(state, message, installed=installed_version(), previous=previous)  # what --undo goes back to
@@ -298,8 +305,7 @@ def undo() -> int:
         write_status("failed", str(exc))
         return 1
     finally:
-        if was_monitoring:
-            start_monitoring()
+        start_monitoring(was_monitoring)
     message = f"Went back to {installed_version()}."
     log(message)
     RESTART_APP_FILE.touch()

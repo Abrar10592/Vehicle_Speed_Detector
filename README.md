@@ -26,6 +26,7 @@ Vehicle speed detection for CCTV cameras (live streams) and recorded videos, wit
 - [src/detector.py](src/detector.py): motion + YOLO vehicle detector.
 - [src/tracker.py](src/tracker.py): centroid tracker.
 - [src/evidence.py](src/evidence.py): evidence clip/metadata writer.
+- [src/power.py](src/power.py): keeps a camera at full speed and the computer awake on Windows laptops.
 - [app/](app/): app pages: home, calibration, live monitor, evidence.
 - [src/video_source.py](src/video_source.py): video file / live stream reading.
 - [src/live.py](src/live.py), [src/monitor.py](src/monitor.py): live view files, monitoring service control, evidence index.
@@ -48,6 +49,16 @@ versions; after upgrading or adding a package, refresh the lock with `pip freeze
 Videos and evidence clips are not stored in Git. On a new computer, copy the `testvideo` and `videos` folders into the
 project folder by hand. Start the app from the project folder: video paths inside it are saved in
 `config/calibration.json` relative to it (e.g. `testvideo/50-1.MTS`).
+
+### Intel processors and graphics (OpenVINO)
+On a computer without an NVIDIA card the detector runs through Intel's OpenVINO (installed with the lock file), on
+the Intel graphics when there is one, otherwise on the processor. The first start converts `yolo11n.pt` to
+`yolo11n_openvino_model/` (about 20 s, once per computer; the self-test of an update does it before the cameras
+start). If OpenVINO cannot be used, the detector falls back to PyTorch on the processor and says so in the camera's
+log. Each camera's log says where it runs (`running on: ...`).
+
+To choose instead of the automatic choice, add `"device"` to a camera's `detector` in `config/calibration.json`:
+`"auto"` (default), `"intel:gpu"`, `"intel:cpu"`, `"cuda"` (NVIDIA) or `"cpu"` (PyTorch on the processor).
 
 ### NVIDIA graphics card (optional)
 The install above gives the processor-only PyTorch. On a computer with an NVIDIA card, swap in the CUDA build of the
@@ -72,8 +83,9 @@ streamlit run streamlit_app.py
 
 The landing page leads to two sections:
 - **Setup > Calibration**: cameras, their videos/streams, lanes, lines and speed limits (below).
-- **Operator > Live monitor**: *Start monitoring* processes every camera in the background and shows each one live
-  with speeds on screen; *Stop monitoring* finishes the clips being recorded, then stops.
+- **Operator > Live monitor**: each camera has its own *Start* and *Stop* button (and *Start all* / *Stop all* at
+  the top). A started camera is processed in the background, in its own process, and shown live with speeds on
+  screen; *Stop* finishes the clips being recorded, then stops that camera only.
 - **Operator > Evidence**: clips of speeding vehicles by date and camera, with a player, downloads,
   *Open folder* (Windows Explorer) and the speed log.
 
@@ -87,7 +99,10 @@ The landing page leads to two sections:
 	- measured distance (meters)
 - **Place the line ends exactly** (below the drawing, once a line is saved): choose a line end and click in the magnified picture exactly where the line must touch the road. Do this for every end of both lines; see the first calibration tip.
 - **Drawing size** scales the frame to fit the screen (800 px fits a laptop); coordinates are always saved at the video's full resolution. The toolbar above the drawing has Undo, Redo, Edit (move or resize a shape) and Reset.
-- Save calibration JSON (example: `config/calibration.json`).
+- Save calibration JSON (example: `config/calibration.json`). A camera that is being monitored reads its settings
+  when it starts, so saving restarts each monitored camera whose settings changed (a few seconds; clips being
+  recorded are finished first).
+- *Run detector on* (Detector section): Automatic, or a fixed choice; see Intel processors and graphics (OpenVINO).
 
 ### Calibration tips
 Where the lines are drawn decides how accurate the speeds are and how many vehicles get one:
@@ -107,8 +122,8 @@ Where the lines are drawn decides how accurate the speeds are and how many vehic
 On a computer that runs unattended, start the app with **Start.bat** instead of `streamlit run`. It runs
 [server.py](server.py), which:
 - starts the app (http://localhost:8501) and starts it again if it ends;
-- starts monitoring again after a crash, a power cut or an update, if it was on (*Start monitoring* pressed and
-  *Stop monitoring* not pressed);
+- starts each camera's monitoring again after a crash, a power cut or an update, if it was on (*Start* pressed
+  and *Stop* not pressed);
 - restarts the app after an update.
 
 To start it whenever the Windows user logs in, run once:
@@ -179,6 +194,20 @@ With the card, the processor is the limit (video decoding, drawing, evidence cli
 and uses under 1 GB of its memory. For more cameras at full frame rate, use a PC with more processor cores or fewer
 cameras per PC.
 
+On the server laptop (HP 250R G10, Core 5 120U, Intel graphics, no NVIDIA card), two 4-megapixel cameras, both with
+the far-line search, in frames per second:
+
+| Detector | Same 20 frames, one after another (both cameras running meanwhile) | Live, both cameras |
+|---|---|---|
+| PyTorch on the processor | 2.9 | 3.3 and 4.1 |
+| OpenVINO on the processor | 3.7 | |
+| OpenVINO on Intel graphics | 5.0 | 9.8 and 8.5 |
+
+All three found the same vehicles. The live figures are not a fair comparison: iVMS-4200 may have been showing the
+cameras during the PyTorch measurement and during a first OpenVINO reading (5.1 and 4.5), and was closed during the
+OpenVINO measurement in the table. Showing cameras in iVMS-4200 or the NVR web page on the same laptop takes a noticeable share of it. Putting one camera on the Intel graphics and the other on the
+processor gave no clear gain.
+
 ## Run Recorded Video Processing
 
 ```bash
@@ -193,16 +222,39 @@ Arguments:
   Ctrl+C stops all cameras and saves the clips recorded so far.
 - `--overlay-out` (optional): output video with lane/line overlays and track info.
 - `--debug-overlay` (optional): show per-vehicle lane membership and start/end crossing flags.
-- `--live-dir` (optional): publish live frames and status there for the Live monitor (a `STOP` file there stops the run).
+- `--live-dir` (optional): publish live frames and status there for the Live monitor (a `STOP` file there stops the run, a `STOP_<camera>` file only that camera).
 - `--realtime` (optional): process video files no faster than they were recorded.
 - `--max-frames` (optional): stop after this many frames, for quick tests on long videos (e.g. `--max-frames 500` = first 20 s at 25 fps).
 
 ## Output
 - Evidence clips are saved under the configured evidence folder:
 	- `evidence/YYYY-MM-DD/CAMERA_ID/HH-MM-SS_<lane>_<speed>kmh.mp4` (one short clip per speeding vehicle)
+	- A clip covers *Pre-event seconds* before and *Post-event seconds* after the measurement, in real time, and
+	  plays at real speed. From a live camera it holds the frames that were processed (about 10 per second), at
+	  the rate they were taken: before this was fixed, clips were sized and played as if all 25 camera frames per
+	  second were kept, so they covered over twice the time and played 2.3-2.75 times too fast.
+	- Clips are saved on a separate thread, so the camera keeps measuring meanwhile (saving a 4-megapixel clip
+	  takes 1.5-4 seconds; before, the camera measured nothing during that time).
 - Speed event log CSV (one row per measured vehicle, with its camera):
 	- `evidence/speed_events.csv`
 	- a CSV from an older version with different columns is renamed to `speed_events_old.csv`
+- Vehicle log CSV (one row per vehicle seen on a lane, measured or not, written when the vehicle is gone):
+	- `evidence/vehicle_log.csv`: when it was seen, for how long, where it was first and last seen, which lines
+	  it crossed, and the result (`measured`, `crossed only the start line`, `crossed no line`, ...). Use it to
+	  find out why vehicles get no speed.
+
+## Tracking
+A vehicle is followed from frame to frame by matching it to the nearest detection where it is expected to be.
+How far it may have moved between two processed frames grows with its size in the picture (at least
+*Max track match distance*): close to a 4-megapixel camera, at about 10 processed frames per second, a vehicle
+moves 100-300 pixels between frames, and a fixed 75-pixel limit split it into a new vehicle at every frame, so it
+never crossed both lines as one vehicle and got no speed.
+
+## Windows Laptops
+Each camera tells Windows that it needs full speed and that the computer must not sleep while it runs. Without
+this, Windows treated the background camera programs as unimportant and ran them on the processor's power-saving
+cores (Core 5 120U: about 5 instead of 10 frames per second). A person choosing Sleep, or closing the lid, still
+puts the computer to sleep: on a server, set the power button and lid to "Do nothing" (see `SERVER_SETUP.txt`).
 
 ## Speed Formula
 - $speed\_{km/h} = \frac{distance\_m}{time\_s} \times 3.6$

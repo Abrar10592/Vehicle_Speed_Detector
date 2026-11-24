@@ -96,7 +96,9 @@ def check_vehicle_detector() -> None:
 
     from src.detector import YoloVehicleDetector
 
-    YoloVehicleDetector(model_path=str(ROOT / "yolo11n.pt")).detect(np.zeros((720, 1280, 3), np.uint8))
+    detector = YoloVehicleDetector(model_path=str(ROOT / "yolo11n.pt"))  # also prepares the OpenVINO copy
+    detector.detect(np.zeros((720, 1280, 3), np.uint8))
+    print(f"self-test: vehicle detector runs on: {detector.engine}")
 
 
 def main() -> int:

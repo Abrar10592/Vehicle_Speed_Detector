@@ -3,7 +3,7 @@ from datetime import date
 import streamlit as st
 
 from src.config import list_camera_ids
-from src.monitor import CONFIG_PATH, evidence_roots, list_clips, monitor_pid
+from src.monitor import CONFIG_PATH, evidence_roots, list_clips, running_cameras
 
 st.title("Vehicle Speed Detector")
 st.caption("Speed measurement and evidence capture from CCTV cameras and recorded videos.")
@@ -17,7 +17,7 @@ except (OSError, ValueError):
 
 with st.container(horizontal=True):
     st.metric("Cameras", len(cameras), border=True)
-    st.metric("Monitoring", "Running" if monitor_pid() else "Stopped", border=True)
+    st.metric("Monitoring", f"{len(running_cameras())} cameras" if running_cameras() else "Stopped", border=True)
     st.metric("Speeding vehicles today", offenders_today, border=True)
 
 setup, operator = st.columns(2)

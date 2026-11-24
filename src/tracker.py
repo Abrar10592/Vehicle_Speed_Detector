@@ -23,9 +23,15 @@ class CentroidTracker:
         max_missing_frames: int = 20,
         max_match_distance_px: float = 75.0,
         velocity_smoothing: float = 0.5,
+        size_match_factor: float = 1.0,
     ) -> None:
         self.max_missing_frames = max_missing_frames
         self.max_match_distance_px = max_match_distance_px
+        # A vehicle near the camera is large in the picture and moves many pixels between two processed frames
+        # (at 10 frames per second a car close to a 4 MP camera moves 100-300 px). A fixed limit then split it
+        # into a new track at every frame, and it never crossed both lines as one vehicle. So the limit grows
+        # with the vehicle's size: up to its own size per frame.
+        self.size_match_factor = size_match_factor
         self.velocity_smoothing = velocity_smoothing
         self.next_track_id = 1
         self.tracks: Dict[int, TrackState] = {}
@@ -43,6 +49,14 @@ class CentroidTracker:
         vx, vy = state.velocity
         return (cx + vx * state.missing_frames, cy + vy * state.missing_frames)
 
+    def _match_limit(self, state: TrackState) -> float:
+        x1, y1, x2, y2 = state.track.bbox
+        per_frame = max(self.max_match_distance_px, self.size_match_factor * max(x2 - x1, y2 - y1))
+        if state.hits == 1:
+            # no movement known yet to predict from: a vehicle that missed frames may have moved further
+            return per_frame * min(max(1, state.missing_frames), 3)
+        return per_frame  # the prediction already moved it along; this covers speeding up, slowing, turning
+
     def _match(self, detections: list[Detection]) -> list[tuple[int, int]]:
         matches: list[tuple[int, int]] = []
         used_tracks: set[int] = set()
@@ -53,10 +67,11 @@ class CentroidTracker:
 
         for ti, (_, state) in enumerate(track_items):
             track_center = self._predicted_centroid(state)
+            limit = self._match_limit(state)
             for di, detection in enumerate(detections):
                 det_center = self._centroid_from_bbox(detection.bbox)
                 d = dist(track_center, det_center)
-                if d <= self.max_match_distance_px:
+                if d <= limit:
                     candidates.append((d, ti, di))
 
         candidates.sort(key=lambda x: x[0])

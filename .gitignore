@@ -14,3 +14,6 @@ config/calibration.json
 *.M2TS
 videos/
 evidence/
+# OpenVINO copy of the YOLO model, made on each computer from the .pt file
+*_openvino_model/
+*_openvino_model.lock

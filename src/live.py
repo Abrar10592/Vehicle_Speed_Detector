@@ -1,7 +1,8 @@
 """Live view files shared by the processing service and the operator dashboard.
 
 For each camera the service keeps <live_dir>/<camera>.jpg (newest overlay frame) and <camera>.json (status)
-up to date. A STOP file in <live_dir> asks the service to finish (pending evidence clips are still saved).
+up to date. A STOP file in <live_dir> asks every camera to finish, a STOP_<camera> file only that camera
+(evidence clips being recorded are still saved).
 """
 
 from __future__ import annotations
@@ -16,6 +17,10 @@ import cv2
 import numpy as np
 
 STOP_FILE_NAME = "STOP"
+
+
+def camera_stop_file_name(camera_id: str) -> str:
+    return f"{STOP_FILE_NAME}_{camera_id}"
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
